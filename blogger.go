@@ -144,8 +144,8 @@ func main() {
 	snippetrssIndexBuffer := bytes.NewBufferString("")
 
 	mainTemplate.Execute(indexBuffer, map[string]interface{}{"Title": blogTitle, "Home": true, "Root": siteRoot, "Articles": indexArticles, "CreatedTime": now})
-	mainRssTemplate.Execute(rssIndexBuffer, map[string]interface{}{"Title": blogTitle, "Home": true, "Root": siteRoot, "Articles": feedArticles, "CreatedTime": &now})
-	mainRssTemplate.Execute(snippetrssIndexBuffer, map[string]interface{}{"Title": blogTitle, "Home": true, "Root": siteRoot, "Articles": snippetArticles, "CreatedTime": &now})
+	mainRssTemplate.Execute(rssIndexBuffer, map[string]interface{}{"Title": blogTitle, "Home": true, "Root": siteRoot, "File": "index.xml", "Articles": feedArticles, "CreatedTime": &now})
+	mainRssTemplate.Execute(snippetrssIndexBuffer, map[string]interface{}{"Title": blogTitle, "Home": true, "Root": siteRoot, "File": "snippets.xml", "Articles": snippetArticles, "CreatedTime": &now})
 
 	for _, article := range articles {
 
