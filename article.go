@@ -80,6 +80,35 @@ func (a Articles) Less(i, j int) bool {
 	return right.Before(left)
 }
 
+func (a Article) Print() {
+	fmt.Println("---")
+
+	var articleType string
+
+	switch a.Type {
+	case Post:
+		articleType = "Post"
+	case Snippet:
+		articleType = "Snippet"
+	case Page:
+		articleType = "Page"
+	}
+
+	if a.Type != Snippet {
+		fmt.Printf("title: %s\n", a.Title)
+	}
+
+	fmt.Printf("author: %s\n", a.Author)
+	fmt.Printf("type: %s\n", articleType)
+	fmt.Println("tags: ")
+	if a.DateModified != nil {
+		fmt.Printf("date: %v\n", a.DateModified.Format(time.RFC3339))
+	}
+
+	fmt.Println("---")
+	fmt.Println("")
+}
+
 func ReadArticle(reader *bufio.Reader) Article {
 	article := Article{}
 
