@@ -19,7 +19,7 @@ var destinationExt = flag.String("extension", "", "Destination file extension")
 var sourcePath = flag.String("source", "source", "Source directory")
 var destinationPath = flag.String("destination", "destination", "Destination directory")
 var siteRoot = flag.String("root", "/", "Site root path")
-var templatePrint = flag.String("print", "post", "Print out a template for a snippet or a blog post")
+var templatePrint = flag.String("print", "", "Print out a template for a snippet or a blog post")
 var templateAuthor = flag.String("author", "", "Set a default post author")
 
 const templateFileName = "templates/template.html"
