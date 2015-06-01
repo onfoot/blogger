@@ -19,6 +19,8 @@ var destinationExt = flag.String("extension", "", "Destination file extension")
 var sourcePath = flag.String("source", "source", "Source directory")
 var destinationPath = flag.String("destination", "destination", "Destination directory")
 var siteRoot = flag.String("root", "/", "Site root path")
+var templatePrint = flag.String("print", "", "Print out a template for a snippet or a blog post")
+var templateAuthor = flag.String("author", "", "Set a default post author")
 
 const templateFileName = "templates/template.html"
 const rssTemplateFileName = "templates/rsstemplate.html"
@@ -27,12 +29,38 @@ func main() {
 
 	flag.Parse()
 
+	if *templatePrint != "" {
+		var article Article
+		now := time.Now().Add(15 * time.Minute)
+		article.DateModified = &now
+
+		if *templateAuthor != "" {
+			article.Author = *templateAuthor
+		}
+
+		switch *templatePrint {
+		case "post":
+			article.Title = "Blog post"
+			article.Type = Post
+			break
+		case "snippet":
+			article.Type = Snippet
+			break
+		default:
+			log.Fatal("post and snippet are the only allowed parameters for -print")
+		}
+
+		article.Print()
+
+		return
+	}
+
 	log.Printf("Blog title is %s", *blogTitle)
 
 	destinationDir, destinationDirErr := os.Open(*destinationPath)
 
 	if destinationDirErr != nil {
-		log.Fatal("Destination directory could not be open", destinationDirErr)
+		log.Fatal("Destination directory could not be open: ", destinationDirErr)
 	}
 
 	defer destinationDir.Close()
