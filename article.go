@@ -36,6 +36,7 @@ type Article struct {
 	Type         PageType
 	Draft        bool
 	Tags         []string
+	AppID        string
 }
 
 func (a Article) HasTag(aTag string) bool {
@@ -131,6 +132,9 @@ func ReadArticle(reader *bufio.Reader) Article {
 			} else {
 				log.Fatalf("Could not parse date \"%s\"", dateStr)
 			}
+
+		case "appid":
+			article.AppID = value
 		case "type":
 			switch value {
 			case "Post":

@@ -151,7 +151,13 @@ func main() {
 
 		destFileBuffer := bytes.NewBufferString("")
 
-		mainTemplate.Execute(destFileBuffer, map[string]interface{}{"BlogTitle": blogTitle, "Article": article, "Title": string(article.Title + " – " + *blogTitle), "Home": false, "Root": siteRoot})
+		mainTemplate.Execute(destFileBuffer, map[string]interface{}{
+			"BlogTitle": blogTitle,
+			"Article":   article,
+			"Title":     string(article.Title + " – " + *blogTitle),
+			"Home":      false,
+			"Root":      siteRoot,
+		})
 
 		for _, tag := range article.Tags {
 			tags[tag] = true
