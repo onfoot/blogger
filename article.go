@@ -149,7 +149,15 @@ func ReadArticle(reader *bufio.Reader) Article {
 			modTime, timeErr := time.Parse(time.RFC3339, dateStr)
 			if timeErr == nil {
 				article.DateModified = &modTime
-			} else {
+				break
+			}
+
+			modTime, timeErr = time.Parse("January 02, 2006 at 03:04PM", dateStr)
+			if timeErr == nil {
+				article.DateModified = &modTime
+			}
+
+			if timeErr != nil {
 				log.Fatalf("Could not parse date \"%s\"", dateStr)
 			}
 
@@ -158,7 +166,15 @@ func ReadArticle(reader *bufio.Reader) Article {
 			modTime, timeErr := time.Parse(time.RFC3339, dateStr)
 			if timeErr == nil {
 				article.DateUpdated = &modTime
-			} else {
+				break
+			}
+
+			modTime, timeErr = time.Parse("January 02, 2006 at 03:04PM", dateStr)
+			if timeErr == nil {
+				article.DateUpdated = &modTime
+			}
+
+			if timeErr != nil {
 				log.Fatalf("Could not parse date \"%s\"", dateStr)
 			}
 
