@@ -204,21 +204,12 @@ func ReadArticle(reader *bufio.Reader) Article {
 	}
 
 	contentBuffer := bytes.NewBufferString("")
-	line, lineErr = reader.ReadString('\n')
-
-	for lineErr == nil {
-		contentBuffer.WriteString(line)
-		contentBuffer.WriteString("\n")
-
-		line, lineErr = reader.ReadString('\n')
-	}
+	reader.WriteTo(contentBuffer)
 
 	htmlFlags := 0
-	// htmlFlags |= blackfriday.HTML_USE_XHTML
 	htmlFlags |= blackfriday.HTML_USE_SMARTYPANTS
 	htmlFlags |= blackfriday.HTML_SMARTYPANTS_FRACTIONS
 	htmlFlags |= blackfriday.HTML_SMARTYPANTS_LATEX_DASHES
-	// htmlFlags |= blackfriday.HTML_SANITIZE_OUTPUT
 	renderer := blackfriday.HtmlRenderer(htmlFlags, "", "")
 	extensions := 0
 	extensions |= blackfriday.EXTENSION_NO_INTRA_EMPHASIS
