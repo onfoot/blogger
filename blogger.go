@@ -122,11 +122,14 @@ func main() {
 
 		if strings.HasPrefix(line, "---") {
 			article = ReadArticle(mdReader)
+
 			article.Filename = name + *destinationExt
 		} else {
 			log.Fatal("Bad article")
-			continue
 		}
+
+		article.Description = strings.Replace(article.Description, "$SITEROOT", *siteRoot, -1)
+		article.Content = strings.Replace(article.Content, "$SITEROOT", *siteRoot, -1)
 
 		if article.DateModified == nil {
 			article.DateModified = new(time.Time)
