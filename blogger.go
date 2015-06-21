@@ -16,14 +16,15 @@ import (
 
 var blogTitle = flag.String("title", "blog", "Blog title")
 var destinationExt = flag.String("extension", "", "Destination file extension")
-var sourcePath = flag.String("source", "source", "Source directory")
+var postsPath = flag.String("posts", "posts", "Posts directory, comma separated for multiple directories")
+var templatesPath = flag.String("templates", "templates", "Templates directory")
 var destinationPath = flag.String("destination", "destination", "Destination directory")
 var siteRoot = flag.String("root", "/", "Site root path")
 var templatePrint = flag.String("print", "", "Print out a template for a snippet or a blog post")
 var templateAuthor = flag.String("author", "", "Set a default post author")
 
-const templateFileName = "templates/template.html"
-const rssTemplateFileName = "templates/rsstemplate.html"
+const templateFileName = "template.html"
+const rssTemplateFileName = "rsstemplate.html"
 
 func main() {
 
@@ -78,16 +79,42 @@ func main() {
 		},
 	}
 
-	mainTemplate := template.Must(template.New("template.html").Funcs(funcMap).ParseFiles(path.Join(*sourcePath, templateFileName)))
-	mainRssTemplate := template.Must(template.New("rsstemplate.html").Funcs(funcMap).ParseFiles(path.Join(*sourcePath, rssTemplateFileName)))
+	mainTemplate := template.Must(template.New("template.html").Funcs(funcMap).ParseFiles(path.Join(*templatesPath, templateFileName)))
+	mainRssTemplate := template.Must(template.New("rsstemplate.html").Funcs(funcMap).ParseFiles(path.Join(*templatesPath, rssTemplateFileName)))
 
 	now := time.Now()
 
-	postDir := path.Join(*sourcePath, "posts")
+	type PostFile struct {
+		Name      string
+		Extension string
+		Path      string
+	}
 
-	sourceFiles, sourceFilesErr := ioutil.ReadDir(postDir)
-	if sourceFilesErr != nil {
-		log.Fatal("Source directory could not be read")
+	sourceFiles := []PostFile{}
+
+	log.Println("Using posts directory:", *postsPath)
+
+	for _, postDir := range strings.Split(*postsPath, ",") {
+		log.Println("Trying directory", postDir)
+
+		files, filesErr := ioutil.ReadDir(postDir)
+		if filesErr != nil {
+			log.Fatal("Source directory could not be read")
+		}
+
+		for _, file := range files {
+			ext := path.Ext(file.Name())
+
+			name := strings.TrimSuffix(path.Base(file.Name()), ext)
+
+			if file.IsDir() || (ext != ".markdown" && ext != ".md" && ext != ".txt") {
+				log.Println("Skipping file", file.Name())
+				continue
+			}
+
+			log.Println("Adding file", file.Name())
+			sourceFiles = append(sourceFiles, PostFile{Name: name, Extension: ext, Path: path.Join(postDir, file.Name())})
+		}
 	}
 
 	var articles Articles
@@ -96,19 +123,15 @@ func main() {
 	var feedArticles Articles
 	var snippetArticles Articles
 
-	for _, sourceFileInfo := range sourceFiles {
+	for _, sourceFile := range sourceFiles {
 
-		ext := path.Ext(sourceFileInfo.Name())
+		fileContent, fileError := ioutil.ReadFile(sourceFile.Path)
 
-		if sourceFileInfo.IsDir() || (ext != ".markdown" && ext != ".md") {
-			continue
+		if fileError != nil {
+			log.Fatal("Read file error", fileError)
 		}
 
-		name := strings.TrimSuffix(path.Base(sourceFileInfo.Name()), ext)
-
-		sourceFile, _ := ioutil.ReadFile(path.Join(postDir, sourceFileInfo.Name()))
-
-		sourceBuffer := bytes.NewBuffer(sourceFile)
+		sourceBuffer := bytes.NewBuffer(fileContent)
 
 		mdReader := bufio.NewReader(sourceBuffer)
 
@@ -123,7 +146,7 @@ func main() {
 		if strings.HasPrefix(line, "---") {
 			article = ReadArticle(mdReader)
 
-			article.Filename = name + *destinationExt
+			article.Filename = sourceFile.Name + *destinationExt
 		} else {
 			log.Fatal("Bad article")
 		}
@@ -133,12 +156,11 @@ func main() {
 
 		if article.DateModified == nil {
 			article.DateModified = new(time.Time)
-			*article.DateModified = sourceFileInfo.ModTime()
 		}
 
-		article.Identifier = name
+		article.Identifier = sourceFile.Name
 
-		if strings.HasSuffix(name, "draft") {
+		if strings.HasSuffix(sourceFile.Name, "draft") {
 			article.Draft = true
 		}
 
