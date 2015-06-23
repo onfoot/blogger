@@ -92,10 +92,7 @@ func main() {
 
 	sourceFiles := []PostFile{}
 
-	log.Println("Using posts directory:", *postsPath)
-
 	for _, postDir := range strings.Split(*postsPath, ",") {
-		log.Println("Trying directory", postDir)
 
 		files, filesErr := ioutil.ReadDir(postDir)
 		if filesErr != nil {
@@ -108,11 +105,9 @@ func main() {
 			name := strings.TrimSuffix(path.Base(file.Name()), ext)
 
 			if file.IsDir() || (ext != ".markdown" && ext != ".md" && ext != ".txt") {
-				log.Println("Skipping file", file.Name())
 				continue
 			}
 
-			log.Println("Adding file", file.Name())
 			sourceFiles = append(sourceFiles, PostFile{Name: name, Extension: ext, Path: path.Join(postDir, file.Name())})
 		}
 	}
@@ -196,9 +191,9 @@ func main() {
 	rssIndexBuffer := bytes.NewBufferString("")
 	snippetrssIndexBuffer := bytes.NewBufferString("")
 
-	mainTemplate.Execute(indexBuffer, map[string]interface{}{"Title": blogTitle, "Home": true, "Root": siteRoot, "Articles": indexArticles, "CreatedTime": now})
-	mainRssTemplate.Execute(rssIndexBuffer, map[string]interface{}{"Title": blogTitle, "Home": true, "Root": siteRoot, "File": "index.xml", "Articles": feedArticles, "CreatedTime": &now})
-	mainRssTemplate.Execute(snippetrssIndexBuffer, map[string]interface{}{"Title": blogTitle, "Home": true, "Root": siteRoot, "File": "snippets.xml", "Articles": snippetArticles, "CreatedTime": &now})
+	mainTemplate.Execute(indexBuffer, map[string]interface{}{"Title": blogTitle, "Home": true, "Root": *siteRoot, "Articles": indexArticles, "CreatedTime": now})
+	mainRssTemplate.Execute(rssIndexBuffer, map[string]interface{}{"Title": blogTitle, "Home": true, "Root": *siteRoot, "File": "index.xml", "Articles": feedArticles, "CreatedTime": &now})
+	mainRssTemplate.Execute(snippetrssIndexBuffer, map[string]interface{}{"Title": blogTitle, "Home": true, "Root": *siteRoot, "File": "snippets.xml", "Articles": snippetArticles, "CreatedTime": &now})
 
 	for _, article := range articles {
 
@@ -209,7 +204,7 @@ func main() {
 			"Article":   article,
 			"Title":     string(article.Title + " – " + *blogTitle),
 			"Home":      false,
-			"Root":      siteRoot,
+			"Root":      *siteRoot,
 		})
 
 		for _, tag := range article.Tags {
@@ -249,7 +244,7 @@ func main() {
 			tagArticles = append(tagArticles, article)
 		}
 
-		mainTemplate.Execute(tagIndexBuffer, map[string]interface{}{"Articles": tagArticles, "Title": "Tag: " + tag + " – " + *blogTitle, "Home": false, "Root": siteRoot})
+		mainTemplate.Execute(tagIndexBuffer, map[string]interface{}{"Articles": tagArticles, "Title": "Tag: " + tag + " – " + *blogTitle, "Home": false, "Root": *siteRoot})
 
 		tagIndexFileName := path.Join(destinationDir.Name(), "tag-"+tag+*destinationExt)
 		ioutil.WriteFile(tagIndexFileName, tagIndexBuffer.Bytes(), os.ModePerm)
