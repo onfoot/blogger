@@ -130,21 +130,13 @@ func main() {
 
 		mdReader := bufio.NewReader(sourceBuffer)
 
-		line, lineErr := mdReader.ReadString('\n')
+		article, readErr := ReadArticle(mdReader)
 
-		if lineErr != nil {
-			continue
-		}
-
-		var article Article
-
-		if strings.HasPrefix(line, "---") {
-			article = ReadArticle(mdReader)
-
-			article.Filename = sourceFile.Name + *destinationExt
-		} else {
+		if readErr != nil {
 			log.Fatal("Bad article")
 		}
+
+		article.Filename = sourceFile.Name + *destinationExt
 
 		article.Description = strings.Replace(article.Description, "$SITEROOT", *siteRoot, -1)
 		article.Content = strings.Replace(article.Content, "$SITEROOT", *siteRoot, -1)

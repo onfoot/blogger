@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"errors"
 	"fmt"
 	"log"
 	"path"
@@ -110,14 +111,21 @@ func (a Article) Print() {
 	fmt.Println("")
 }
 
-func ReadArticle(reader *bufio.Reader) Article {
-	article := Article{}
+func ParseFrontMatter(reader *bufio.Reader) (map[string]string, error) {
+
+	data := make(map[string]string)
 
 	line, lineErr := reader.ReadString('\n')
 
-	article.Type = Post
+	if !strings.HasPrefix(line, "---") {
+		return data, errors.New("Invalid front matter header")
+	}
 
 	for lineErr == nil {
+		line, lineErr = reader.ReadString('\n')
+		if lineErr != nil {
+			continue
+		}
 
 		if strings.HasPrefix(line, "---") {
 			break
@@ -134,6 +142,23 @@ func ReadArticle(reader *bufio.Reader) Article {
 
 		key = strings.Trim(key, " \t\r\n")
 		value = strings.Trim(value, " \t\r\n")
+
+		data[key] = value
+	}
+
+	return data, nil
+}
+
+func ReadArticle(reader *bufio.Reader) (Article, error) {
+	article := Article{}
+
+	frontMatter, matterErr := ParseFrontMatter(reader)
+
+	if matterErr != nil {
+		return article, errors.New("Invalid article header")
+	}
+
+	for key, value := range frontMatter {
 
 		switch key {
 		case "title":
@@ -200,7 +225,6 @@ func ReadArticle(reader *bufio.Reader) Article {
 			}
 		}
 
-		line, lineErr = reader.ReadString('\n')
 	}
 
 	contentBuffer := bytes.NewBufferString("")
@@ -228,5 +252,5 @@ func ReadArticle(reader *bufio.Reader) Article {
 		article.Description = article.Content
 	}
 
-	return article
+	return article, nil
 }
