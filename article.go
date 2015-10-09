@@ -38,6 +38,7 @@ type Article struct {
 	Draft        bool
 	Tags         []string
 	AppID        string
+	Meta         map[string]string
 }
 
 func (a Article) HasTag(aTag string) bool {
@@ -159,6 +160,16 @@ func ReadArticle(reader *bufio.Reader) (Article, error) {
 	}
 
 	for key, value := range frontMatter {
+
+		if strings.HasPrefix(key, "meta-") {
+			if article.Meta == nil {
+				article.Meta = make(map[string]string)
+			}
+			metaName := strings.TrimPrefix(key, "meta-")
+			log.Printf("AAA meta %s", metaName)
+			article.Meta[metaName] = value
+			continue
+		}
 
 		switch key {
 		case "title":
