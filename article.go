@@ -15,12 +15,12 @@ import (
 	"github.com/russross/blackfriday"
 )
 
-type PageType int
+type PageType string
 
 const (
-	Post PageType = iota
-	Page
-	Snippet
+	Post    PageType = "Post"
+	Page             = "Page"
+	Snippet          = "Snippet"
 )
 
 type Article struct {

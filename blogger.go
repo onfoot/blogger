@@ -72,6 +72,8 @@ func main() {
 		"shortDate":    func(args ...interface{}) string { return args[0].(*time.Time).Format("Jan _2, 2006") },
 		"atomDate":     func(args ...interface{}) string { return args[0].(*time.Time).Format("2006-01-02T15:04:05Z07:00") },
 		"Snippet":      func(args ...interface{}) bool { return args[0].(*Article).Type == Snippet },
+		"Post":         func(args ...interface{}) bool { return args[0].(*Article).Type == Post },
+		"Page":         func(args ...interface{}) bool { return args[0].(*Article).Type == Page },
 		"last":         func(index, count int) bool { return index == count-1 },
 		"tagIndexName": func(tag string) string { return "tag-" + tag + *destinationExt },
 		"path": func(article Article) string {
