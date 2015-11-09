@@ -20,7 +20,7 @@ var postsPath = flag.String("posts", "posts", "Posts directory, comma separated 
 var templatesPath = flag.String("templates", "templates", "Templates directory")
 var destinationPath = flag.String("destination", "destination", "Destination directory")
 var siteRoot = flag.String("root", "/", "Site root path")
-var templatePrint = flag.String("print", "", "Print out a template for a snippet or a blog post")
+var templatePrint = flag.String("print", "", "Print out a template for a snippet, blog post or a page")
 var templateAuthor = flag.String("author", "", "Set a default post author")
 
 const templateFileName = "template.html"
@@ -40,6 +40,10 @@ func main() {
 		}
 
 		switch *templatePrint {
+		case "page":
+			article.Title = "Hello world"
+			article.Type = Page
+			break
 		case "post":
 			article.Title = "Blog post"
 			article.Type = Post
@@ -48,7 +52,7 @@ func main() {
 			article.Type = Snippet
 			break
 		default:
-			log.Fatal("post and snippet are the only allowed parameters for -print")
+			log.Fatal("post, snippet and page are the only allowed parameters for -print")
 		}
 
 		article.Print()
