@@ -23,12 +23,18 @@ const (
 	Snippet          = "Snippet"
 )
 
+const (
+	DefaultDateFormat string = time.RFC3339
+	IFTTTDateFormat			= "January 02, 2006 at 03:04PM"
+)
+
 type Article struct {
 	Author       string
 	DateModified *time.Time
 	DateUpdated  *time.Time
 	Title        string
 	Content      string
+	RawContent	string
 	Description  string
 	Filename     string
 	Link         string
@@ -105,7 +111,19 @@ func (a Article) Print() {
 	fmt.Printf("type: %s\n", articleType)
 	fmt.Println("tags: ")
 	if a.DateModified != nil {
-		fmt.Printf("date: %v\n", a.DateModified.Format(time.RFC3339))
+		fmt.Printf("date: %v\n", a.DateModified.Format(DefaultDateFormat))
+	}
+
+	if a.DateUpdated != nil {
+		fmt.Printf("date: %v\n", a.DateUpdated.Format(DefaultDateFormat))
+	}
+
+	if len(a.AppID) > 0 {
+		fmt.Printf("appid: %v\n", a.AppID)
+	}
+
+	if a.Meta != nil {
+
 	}
 
 	fmt.Println("---")
@@ -159,6 +177,8 @@ func ReadArticle(reader *bufio.Reader) (Article, error) {
 		return article, errors.New("Invalid article header")
 	}
 
+	dateModifiedFound := false
+
 	for key, value := range frontMatter {
 
 		if strings.HasPrefix(key, "meta-") {
@@ -166,7 +186,6 @@ func ReadArticle(reader *bufio.Reader) (Article, error) {
 				article.Meta = make(map[string]string)
 			}
 			metaName := strings.TrimPrefix(key, "meta-")
-			log.Printf("AAA meta %s", metaName)
 			article.Meta[metaName] = value
 			continue
 		}
@@ -182,15 +201,18 @@ func ReadArticle(reader *bufio.Reader) (Article, error) {
 			article.Link = value
 		case "date":
 			dateStr := value
-			modTime, timeErr := time.Parse(time.RFC3339, dateStr)
+			modTime, timeErr := time.Parse(DefaultDateFormat, dateStr)
 			if timeErr == nil {
 				article.DateModified = &modTime
+				dateModifiedFound = true
 				break
 			}
 
-			modTime, timeErr = time.Parse("January 02, 2006 at 03:04PM", dateStr)
+			modTime, timeErr = time.Parse(IFTTTDateFormat, dateStr)
 			if timeErr == nil {
 				article.DateModified = &modTime
+				dateModifiedFound = true
+				break
 			}
 
 			if timeErr != nil {
@@ -199,15 +221,16 @@ func ReadArticle(reader *bufio.Reader) (Article, error) {
 
 		case "updated":
 			dateStr := value
-			modTime, timeErr := time.Parse(time.RFC3339, dateStr)
+			modTime, timeErr := time.Parse(DefaultDateFormat, dateStr)
 			if timeErr == nil {
 				article.DateUpdated = &modTime
 				break
 			}
 
-			modTime, timeErr = time.Parse("January 02, 2006 at 03:04PM", dateStr)
+			modTime, timeErr = time.Parse(IFTTTDateFormat, dateStr)
 			if timeErr == nil {
 				article.DateUpdated = &modTime
+				break
 			}
 
 			if timeErr != nil {
@@ -236,6 +259,11 @@ func ReadArticle(reader *bufio.Reader) (Article, error) {
 			}
 		}
 
+	}
+
+	if !dateModifiedFound {
+		now := time.Now()
+		article.DateModified = &now
 	}
 
 	contentBuffer := bytes.NewBufferString("")
