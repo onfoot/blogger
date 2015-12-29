@@ -8,6 +8,7 @@ import (
 	"log"
 	"os"
 	"path"
+	"path/filepath"
 	"sort"
 	"strings"
 	"text/template"
@@ -100,22 +101,21 @@ func main() {
 
 	for _, postDir := range strings.Split(*postsPath, ",") {
 
-		files, filesErr := ioutil.ReadDir(postDir)
-		if filesErr != nil {
-			log.Fatal("Source directory could not be read")
-		}
+		walkFunc := func(filepath string, info os.FileInfo, err error) error {
+			ext := path.Ext(info.Name())
+			name := strings.TrimSuffix(path.Base(info.Name()), ext)
 
-		for _, file := range files {
-			ext := path.Ext(file.Name())
-
-			name := strings.TrimSuffix(path.Base(file.Name()), ext)
-
-			if file.IsDir() || (ext != ".markdown" && ext != ".md" && ext != ".txt") {
-				continue
+			if info.IsDir() || (ext != ".markdown" && ext != ".md" && ext != ".txt") {
+				log.Println("Skipping file", filepath)
+				return nil
 			}
 
-			sourceFiles = append(sourceFiles, PostFile{Name: name, Extension: ext, Path: path.Join(postDir, file.Name())})
+			sourceFiles = append(sourceFiles, PostFile{Name: name, Extension: ext, Path: filepath})
+
+			return nil
 		}
+
+		filepath.Walk(postDir, walkFunc)
 	}
 
 	var articles Articles

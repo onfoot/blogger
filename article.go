@@ -25,7 +25,7 @@ const (
 
 const (
 	DefaultDateFormat string = time.RFC3339
-	IFTTTDateFormat			= "January 02, 2006 at 03:04PM"
+	IFTTTDateFormat          = "January 02, 2006 at 03:04PM"
 )
 
 type Article struct {
@@ -34,7 +34,7 @@ type Article struct {
 	DateUpdated  *time.Time
 	Title        string
 	Content      string
-	RawContent	string
+	RawContent   string
 	Description  string
 	Filename     string
 	Link         string
@@ -177,8 +177,6 @@ func ReadArticle(reader *bufio.Reader) (Article, error) {
 		return article, errors.New("Invalid article header")
 	}
 
-	dateModifiedFound := false
-
 	for key, value := range frontMatter {
 
 		if strings.HasPrefix(key, "meta-") {
@@ -204,14 +202,12 @@ func ReadArticle(reader *bufio.Reader) (Article, error) {
 			modTime, timeErr := time.Parse(DefaultDateFormat, dateStr)
 			if timeErr == nil {
 				article.DateModified = &modTime
-				dateModifiedFound = true
 				break
 			}
 
 			modTime, timeErr = time.Parse(IFTTTDateFormat, dateStr)
 			if timeErr == nil {
 				article.DateModified = &modTime
-				dateModifiedFound = true
 				break
 			}
 
@@ -261,7 +257,7 @@ func ReadArticle(reader *bufio.Reader) (Article, error) {
 
 	}
 
-	if !dateModifiedFound {
+	if article.DateModified == nil {
 		now := time.Now()
 		article.DateModified = &now
 	}
