@@ -31,37 +31,8 @@ const templateFileName = "template.html"
 const rssTemplateFileName = "rsstemplate.html"
 
 func generate() {
-	if *templatePrint != "" {
-		var article Article
-		now := time.Now().Add(15 * time.Minute)
-		article.DateModified = &now
 
-		if *templateAuthor != "" {
-			article.Author = *templateAuthor
-		}
-
-		switch *templatePrint {
-		case "page":
-			article.Title = "Hello world"
-			article.Type = Page
-			break
-		case "post":
-			article.Title = "Blog post"
-			article.Type = Post
-			break
-		case "snippet":
-			article.Type = Snippet
-			break
-		default:
-			log.Fatal("post, snippet and page are the only allowed parameters for -print")
-		}
-
-		article.Print()
-
-		return
-	}
-
-	log.Printf("Blog title is %s", *blogTitle)
+	log.Printf("Generating blog: %s", *blogTitle)
 
 	destinationDir, destinationDirErr := os.Open(*destinationPath)
 
@@ -106,7 +77,6 @@ func generate() {
 			name := strings.TrimSuffix(path.Base(info.Name()), ext)
 
 			if info.IsDir() || (ext != ".markdown" && ext != ".md" && ext != ".txt") {
-				log.Println("Skipping file", filepath)
 				return nil
 			}
 
@@ -118,11 +88,7 @@ func generate() {
 		filepath.Walk(postDir, walkFunc)
 	}
 
-	var articles Articles
-
-	var indexArticles Articles
-	var feedArticles Articles
-	var snippetArticles Articles
+	var articles, indexArticles, feedArticles, snippetArticles Articles
 
 	for _, sourceFile := range sourceFiles {
 
@@ -139,7 +105,7 @@ func generate() {
 		article, readErr := ReadArticle(mdReader)
 
 		if readErr != nil {
-			log.Printf("Skipping file %v due to parse error %v", sourceFile.Path, readErr)
+			log.Printf("Skipping file %v due to parse error: %v", sourceFile.Path, readErr)
 			continue
 		}
 
@@ -153,10 +119,6 @@ func generate() {
 		}
 
 		article.Identifier = sourceFile.Name
-
-		if strings.HasSuffix(sourceFile.Name, "draft") {
-			article.Draft = true
-		}
 
 		articles = append(articles, &article)
 
@@ -254,9 +216,41 @@ func main() {
 
 	flag.Parse()
 
+	if *templatePrint != "" {
+		var article Article
+		now := time.Now().Add(15 * time.Minute)
+		article.DateModified = &now
+
+		article.Draft = true
+
+		if *templateAuthor != "" {
+			article.Author = *templateAuthor
+		}
+
+		switch *templatePrint {
+		case "page":
+			article.Title = "Hello world"
+			article.Type = Page
+			break
+		case "post":
+			article.Title = "Blog post"
+			article.Type = Post
+			break
+		case "snippet":
+			article.Type = Snippet
+			break
+		default:
+			log.Fatal("post, snippet and page are the only allowed parameters for -print")
+		}
+
+		article.Print()
+
+		return
+	}
+
 	generate()
 
-	if *listen && *templatePrint == "" {
+	if *listen {
 		watcher, err := fsnotify.NewWatcher()
 		if err != nil {
 			log.Fatal("Couldn't watch the post directories")
@@ -278,10 +272,25 @@ func main() {
 			}
 		}()
 
+		var watchedDirs []string
+
 		for _, postDir := range strings.Split(*postsPath, ",") {
-			log.Println("Listening to changes in post directory", postDir)
-			watcher.Add(postDir)
+
+			walkFunc := func(filepath string, info os.FileInfo, err error) error {
+				if !info.IsDir() {
+					return nil
+				}
+
+				watchedDirs = append(watchedDirs, filepath)
+				watcher.Add(filepath)
+
+				return nil
+			}
+
+			filepath.Walk(postDir, walkFunc)
 		}
+
+		log.Printf("Listening to post changes in directory: %s…", strings.Join(watchedDirs, ", "))
 
 		<-watcherDone
 	}

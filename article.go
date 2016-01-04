@@ -137,8 +137,11 @@ func (a Article) Print() {
 		fmt.Printf("appid: %v\n", a.AppID)
 	}
 
-	if a.Meta != nil {
+	if a.Draft {
+		fmt.Printf("draft: true")
+	}
 
+	if a.Meta != nil {
 	}
 
 	fmt.Println("---")
@@ -251,6 +254,8 @@ func ReadArticle(reader *bufio.Reader) (Article, error) {
 
 		case "appid":
 			article.AppID = value
+		case "draft":
+			article.Draft = (value == "true")
 		case "type":
 			switch value {
 			case "Post":
