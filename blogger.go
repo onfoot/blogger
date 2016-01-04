@@ -13,6 +13,8 @@ import (
 	"strings"
 	"text/template"
 	"time"
+
+	"gopkg.in/fsnotify.v1"
 )
 
 var blogTitle = flag.String("title", "blog", "Blog title")
@@ -23,14 +25,12 @@ var destinationPath = flag.String("destination", "destination", "Destination dir
 var siteRoot = flag.String("root", "/", "Site root path")
 var templatePrint = flag.String("print", "", "Print out a template for a snippet, blog post or a page")
 var templateAuthor = flag.String("author", "", "Set a default post author")
+var listen = flag.Bool("listen", false, "Listen to changes in post directories and regenerate")
 
 const templateFileName = "template.html"
 const rssTemplateFileName = "rsstemplate.html"
 
-func main() {
-
-	flag.Parse()
-
+func generate() {
 	if *templatePrint != "" {
 		var article Article
 		now := time.Now().Add(15 * time.Minute)
@@ -246,5 +246,44 @@ func main() {
 
 		tagIndexFileName := path.Join(destinationDir.Name(), "tag-"+tag+*destinationExt)
 		ioutil.WriteFile(tagIndexFileName, tagIndexBuffer.Bytes(), os.ModePerm)
+	}
+}
+
+func main() {
+
+	flag.Parse()
+
+	generate()
+
+	if *listen && *templatePrint == "" {
+		watcher, err := fsnotify.NewWatcher()
+		if err != nil {
+			log.Fatal("Couldn't watch the post directories")
+		}
+		defer watcher.Close()
+
+		watcherDone := make(chan bool)
+		go func() {
+			for {
+				select {
+				case event := <-watcher.Events:
+					if event.Op&fsnotify.Write == fsnotify.Write {
+						log.Println("modified file:", event.Name)
+
+						generate()
+					}
+				case err := <-watcher.Errors:
+					log.Fatal("Got error:", err)
+					watcherDone <- true
+					return
+				}
+			}
+		}()
+
+		for _, postDir := range strings.Split(*postsPath, ",") {
+			watcher.Add(postDir)
+		}
+
+		<-watcherDone
 	}
 }
