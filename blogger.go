@@ -66,7 +66,7 @@ func generate() {
 	destinationDir, destinationDirErr := os.Open(*destinationPath)
 
 	if destinationDirErr != nil {
-		log.Fatal("Destination directory could not be open: ", destinationDirErr)
+		log.Fatal("Destination directory could not be opened: ", destinationDirErr)
 	}
 
 	defer destinationDir.Close()
@@ -129,17 +129,18 @@ func generate() {
 		fileContent, fileError := ioutil.ReadFile(sourceFile.Path)
 
 		if fileError != nil {
-			log.Fatal("Read file error", fileError)
+			log.Printf("Skipping %v due to error: %v", sourceFile.Path, fileError)
+			continue
 		}
 
 		sourceBuffer := bytes.NewBuffer(fileContent)
-
 		mdReader := bufio.NewReader(sourceBuffer)
 
 		article, readErr := ReadArticle(mdReader)
 
 		if readErr != nil {
-			log.Fatal("Bad article")
+			log.Printf("Skipping file %v due to parse error %v", sourceFile.Path, readErr)
+			continue
 		}
 
 		article.Filename = sourceFile.Name + *destinationExt
@@ -216,7 +217,7 @@ func generate() {
 		writeErr := ioutil.WriteFile(destinationFileName, destFileBuffer.Bytes(), os.ModePerm)
 
 		if writeErr != nil {
-			log.Println(writeErr)
+			log.Printf("Could not write file %v due to error: %v", destinationFileName, writeErr)
 		}
 	}
 
@@ -268,19 +269,17 @@ func main() {
 				select {
 				case event := <-watcher.Events:
 					if event.Op&fsnotify.Write == fsnotify.Write {
-						log.Println("modified file:", event.Name)
-
+						log.Println("Modified file: ", event.Name)
 						generate()
 					}
 				case err := <-watcher.Errors:
-					log.Fatal("Got error:", err)
-					watcherDone <- true
-					return
+					log.Println("Got error:", err)
 				}
 			}
 		}()
 
 		for _, postDir := range strings.Split(*postsPath, ",") {
+			log.Println("Listening to changes in post directory", postDir)
 			watcher.Add(postDir)
 		}
 

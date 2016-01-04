@@ -5,7 +5,6 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
-	"log"
 	"path"
 	"strconv"
 	"strings"
@@ -229,7 +228,7 @@ func ReadArticle(reader *bufio.Reader) (Article, error) {
 			}
 
 			if timeErr != nil {
-				log.Fatalf("Could not parse date \"%s\"", dateStr)
+				return article, timeErr
 			}
 
 		case "updated":
@@ -247,7 +246,7 @@ func ReadArticle(reader *bufio.Reader) (Article, error) {
 			}
 
 			if timeErr != nil {
-				log.Fatalf("Could not parse date \"%s\"", dateStr)
+				return article, timeErr
 			}
 
 		case "appid":
