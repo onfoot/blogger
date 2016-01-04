@@ -10,8 +10,6 @@ import (
 	"strings"
 	"time"
 	"unicode"
-
-	"github.com/russross/blackfriday"
 )
 
 // PageType is a convenience type alias for page type
@@ -40,7 +38,7 @@ type Article struct {
 	DateUpdated  *time.Time
 	Title        string
 	Content      string
-	RawContent   string
+	RawContent   []byte
 	Description  string
 	Filename     string
 	Link         string
@@ -285,27 +283,7 @@ func ReadArticle(reader *bufio.Reader) (Article, error) {
 	contentBuffer := bytes.NewBufferString("")
 	reader.WriteTo(contentBuffer)
 
-	htmlFlags := 0
-	htmlFlags |= blackfriday.HTML_USE_SMARTYPANTS
-	htmlFlags |= blackfriday.HTML_SMARTYPANTS_FRACTIONS
-	htmlFlags |= blackfriday.HTML_SMARTYPANTS_LATEX_DASHES
-	renderer := blackfriday.HtmlRenderer(htmlFlags, "", "")
-	extensions := 0
-	extensions |= blackfriday.EXTENSION_NO_INTRA_EMPHASIS
-	extensions |= blackfriday.EXTENSION_TABLES
-	extensions |= blackfriday.EXTENSION_FENCED_CODE
-	extensions |= blackfriday.EXTENSION_AUTOLINK
-	extensions |= blackfriday.EXTENSION_STRIKETHROUGH
-	extensions |= blackfriday.EXTENSION_SPACE_HEADERS
-	extensions |= blackfriday.EXTENSION_HEADER_IDS
-
-	md := blackfriday.Markdown(contentBuffer.Bytes(), renderer, extensions)
-
-	article.Content = string(md)
-
-	if len(article.Description) == 0 {
-		article.Description = article.Content
-	}
+	article.RawContent = contentBuffer.Bytes()
 
 	return article, nil
 }

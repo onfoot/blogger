@@ -14,6 +14,8 @@ import (
 	"text/template"
 	"time"
 
+	"github.com/russross/blackfriday"
+
 	"gopkg.in/fsnotify.v1"
 )
 
@@ -90,6 +92,28 @@ func generate() {
 
 	var articles, indexArticles, feedArticles, snippetArticles Articles
 
+	htmlFlags := 0
+	htmlFlags |= blackfriday.HTML_USE_SMARTYPANTS
+	htmlFlags |= blackfriday.HTML_SMARTYPANTS_FRACTIONS
+	htmlFlags |= blackfriday.HTML_SMARTYPANTS_LATEX_DASHES
+
+	var rendererParameters blackfriday.HtmlRendererParameters
+
+	htmlPrefix := *siteRoot
+	htmlPrefix = strings.TrimSuffix(htmlPrefix, "/")
+	rendererParameters.AbsolutePrefix = htmlPrefix
+
+	log.Println("Using prefix", htmlPrefix)
+	renderer := blackfriday.HtmlRendererWithParameters(htmlFlags, "", "", rendererParameters)
+	extensions := 0
+	extensions |= blackfriday.EXTENSION_NO_INTRA_EMPHASIS
+	extensions |= blackfriday.EXTENSION_TABLES
+	extensions |= blackfriday.EXTENSION_FENCED_CODE
+	extensions |= blackfriday.EXTENSION_AUTOLINK
+	extensions |= blackfriday.EXTENSION_STRIKETHROUGH
+	extensions |= blackfriday.EXTENSION_SPACE_HEADERS
+	extensions |= blackfriday.EXTENSION_HEADER_IDS
+
 	for _, sourceFile := range sourceFiles {
 
 		fileContent, fileError := ioutil.ReadFile(sourceFile.Path)
@@ -100,9 +124,17 @@ func generate() {
 		}
 
 		sourceBuffer := bytes.NewBuffer(fileContent)
-		mdReader := bufio.NewReader(sourceBuffer)
+		articleReader := bufio.NewReader(sourceBuffer)
 
-		article, readErr := ReadArticle(mdReader)
+		article, readErr := ReadArticle(articleReader)
+
+		md := blackfriday.Markdown(article.RawContent, renderer, extensions)
+
+		article.Content = string(md)
+
+		if len(article.Description) == 0 {
+			article.Description = article.Content
+		}
 
 		if readErr != nil {
 			log.Printf("Skipping file %v due to parse error: %v", sourceFile.Path, readErr)
@@ -110,9 +142,6 @@ func generate() {
 		}
 
 		article.Filename = sourceFile.Name + *destinationExt
-
-		article.Description = strings.Replace(article.Description, "$SITEROOT", *siteRoot, -1)
-		article.Content = strings.Replace(article.Content, "$SITEROOT", *siteRoot, -1)
 
 		if article.DateModified == nil {
 			article.DateModified = new(time.Time)
