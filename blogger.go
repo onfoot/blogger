@@ -311,7 +311,6 @@ func main() {
 				}
 
 				watchedDirs = append(watchedDirs, filepath)
-				watcher.Add(filepath)
 
 				return nil
 			}
@@ -319,7 +318,13 @@ func main() {
 			filepath.Walk(postDir, walkFunc)
 		}
 
-		log.Printf("Listening to post changes in directory: %s…", strings.Join(watchedDirs, ", "))
+		watchedDirs = append(watchedDirs, *templatesPath)
+
+		for _, watchedDir := range watchedDirs {
+			watcher.Add(watchedDir)
+		}
+
+		log.Printf("Listening to changes in directories: %s…", strings.Join(watchedDirs, ", "))
 
 		<-watcherDone
 	}
