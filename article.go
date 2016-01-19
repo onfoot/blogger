@@ -280,8 +280,8 @@ func ReadArticle(reader *bufio.Reader) (Article, error) {
 		article.DateModified = &now
 	}
 
-	contentBuffer := bytes.NewBufferString("")
-	reader.WriteTo(contentBuffer)
+	var contentBuffer bytes.Buffer
+	reader.WriteTo(&contentBuffer)
 
 	article.RawContent = contentBuffer.Bytes()
 

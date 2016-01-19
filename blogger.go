@@ -116,17 +116,21 @@ func generate() {
 
 	for _, sourceFile := range sourceFiles {
 
-		fileContent, fileError := ioutil.ReadFile(sourceFile.Path)
+		file, fileError := os.Open(sourceFile.Path)
 
 		if fileError != nil {
 			log.Printf("Skipping %v due to error: %v", sourceFile.Path, fileError)
 			continue
 		}
 
-		sourceBuffer := bytes.NewBuffer(fileContent)
-		articleReader := bufio.NewReader(sourceBuffer)
+		defer file.Close()
 
-		article, readErr := ReadArticle(articleReader)
+		article, readErr := ReadArticle(bufio.NewReader(file))
+
+		if readErr != nil {
+			log.Printf("Skipping file %v due to parse error: %v", sourceFile.Path, readErr)
+			continue
+		}
 
 		md := blackfriday.Markdown(article.RawContent, renderer, extensions)
 
@@ -134,11 +138,6 @@ func generate() {
 
 		if len(article.Description) == 0 {
 			article.Description = article.Content
-		}
-
-		if readErr != nil {
-			log.Printf("Skipping file %v due to parse error: %v", sourceFile.Path, readErr)
-			continue
 		}
 
 		article.Filename = sourceFile.Name + *destinationExt
