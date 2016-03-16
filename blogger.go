@@ -136,10 +136,6 @@ func generate() {
 
 		article.Content = string(md)
 
-		if len(article.Description) == 0 {
-			article.Description = article.Content
-		}
-
 		article.Filename = sourceFile.Name + *destinationExt
 
 		if article.DateModified == nil {
