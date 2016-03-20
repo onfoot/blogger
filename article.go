@@ -135,7 +135,7 @@ func (a Article) Print() {
 	}
 
 	if a.Draft {
-		fmt.Printf("draft: true")
+		fmt.Printf("draft: true\n")
 	}
 
 	if a.Meta != nil {
