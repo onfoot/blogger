@@ -70,12 +70,11 @@ func (a Article) BasePath() string {
 			return "drafts"
 		}
 
-		return path.Join(strconv.Itoa(a.DateModified.Year()), fmt.Sprintf("%02d", int(a.DateModified.Month())))
 	case Page:
 		return ""
 	}
 
-	return ""
+	return path.Join(strconv.Itoa(a.DateModified.Year()), fmt.Sprintf("%02d", int(a.DateModified.Month())))
 }
 
 // FullPath combines BasePath with articles file name
