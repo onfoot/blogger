@@ -113,6 +113,7 @@ func generate() {
 	extensions |= blackfriday.EXTENSION_STRIKETHROUGH
 	extensions |= blackfriday.EXTENSION_SPACE_HEADERS
 	extensions |= blackfriday.EXTENSION_HEADER_IDS
+	extensions |= blackfriday.EXTENSION_FOOTNOTES
 
 	for _, sourceFile := range sourceFiles {
 
