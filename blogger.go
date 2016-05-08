@@ -32,6 +32,18 @@ var listen = flag.Bool("listen", false, "Listen to changes in post directories a
 const templateFileName = "template.html"
 const rssTemplateFileName = "rsstemplate.html"
 
+var postExtensions = []string{".md", ".markdown", ".txt"}
+
+func containsString(haystack []string, needle string) bool {
+	for _, hay := range haystack {
+		if hay == needle {
+			return true
+		}
+	}
+
+	return false
+}
+
 func generate() {
 
 	log.Printf("Generating blog: %s", *blogTitle)
@@ -75,14 +87,31 @@ func generate() {
 	for _, postDir := range strings.Split(*postsPath, ",") {
 
 		walkFunc := func(filepath string, info os.FileInfo, err error) error {
-			ext := path.Ext(info.Name())
-			name := strings.TrimSuffix(path.Base(info.Name()), ext)
+			if err != nil {
+				log.Fatalf("Post directory %q not found", filepath)
+			}
 
-			if info.IsDir() || (ext != ".markdown" && ext != ".md" && ext != ".txt") {
+			if info.IsDir() {
 				return nil
 			}
 
-			sourceFiles = append(sourceFiles, PostFile{Name: name, Extension: ext, Path: filepath})
+			filename := path.Base(info.Name())
+			ext := path.Ext(filename)
+
+			if !containsString(postExtensions, ext) {
+				return nil
+			}
+
+			for {
+				filename = strings.TrimSuffix(filename, ext)
+				ext = path.Ext(filename)
+
+				if !containsString(postExtensions, ext) {
+					break
+				}
+			}
+
+			sourceFiles = append(sourceFiles, PostFile{Name: filename, Extension: ext, Path: filepath})
 
 			return nil
 		}
