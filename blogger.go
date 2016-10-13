@@ -14,6 +14,8 @@ import (
 	"text/template"
 	"time"
 
+	"macbirdie.net/blogger/post"
+
 	"github.com/russross/blackfriday"
 
 	"gopkg.in/fsnotify.v1"
@@ -61,12 +63,12 @@ func generate() {
 		"snippetDate":  func(args ...interface{}) string { return args[0].(*time.Time).Format("Jan _2 2006, 15:04") },
 		"shortDate":    func(args ...interface{}) string { return args[0].(*time.Time).Format("Jan _2, 2006") },
 		"atomDate":     func(args ...interface{}) string { return args[0].(*time.Time).Format("2006-01-02T15:04:05Z07:00") },
-		"Snippet":      func(args ...interface{}) bool { return args[0].(*Article).Type == Snippet },
-		"Post":         func(args ...interface{}) bool { return args[0].(*Article).Type == Post },
-		"Page":         func(args ...interface{}) bool { return args[0].(*Article).Type == Page },
+		"Snippet":      func(args ...interface{}) bool { return args[0].(*post.Article).Type == post.Snippet },
+		"Post":         func(args ...interface{}) bool { return args[0].(*post.Article).Type == post.Post },
+		"Page":         func(args ...interface{}) bool { return args[0].(*post.Article).Type == post.Page },
 		"last":         func(index, count int) bool { return index == count-1 },
 		"tagIndexName": func(tag string) string { return "tag-" + tag + *destinationExt },
-		"path": func(article Article) string {
+		"path": func(article post.Article) string {
 			return article.FullPath()
 		},
 	}
@@ -119,7 +121,7 @@ func generate() {
 		filepath.Walk(postDir, walkFunc)
 	}
 
-	var articles, indexArticles, feedArticles, snippetArticles Articles
+	var articles, indexArticles, feedArticles, snippetArticles post.Articles
 
 	htmlFlags := 0
 	htmlFlags |= blackfriday.HTML_USE_SMARTYPANTS
@@ -155,7 +157,7 @@ func generate() {
 
 		defer file.Close()
 
-		article, readErr := ReadArticle(bufio.NewReader(file))
+		article, readErr := post.ReadArticle(bufio.NewReader(file))
 
 		if readErr != nil {
 			log.Printf("Skipping file %v due to parse error: %v", sourceFile.Path, readErr)
@@ -176,7 +178,7 @@ func generate() {
 
 		articles = append(articles, &article)
 
-		if article.Type == Page {
+		if article.Type == post.Page {
 			continue
 		}
 
@@ -184,11 +186,11 @@ func generate() {
 			continue
 		}
 
-		if article.Type == Post {
+		if article.Type == post.Post {
 			feedArticles = append(feedArticles, &article)
 		}
 
-		if article.Type == Snippet {
+		if article.Type == post.Snippet {
 			snippetArticles = append(snippetArticles, &article)
 		}
 
@@ -206,9 +208,31 @@ func generate() {
 	rssIndexBuffer := bytes.NewBufferString("")
 	snippetrssIndexBuffer := bytes.NewBufferString("")
 
-	mainTemplate.Execute(indexBuffer, map[string]interface{}{"Title": blogTitle, "Home": true, "Root": *siteRoot, "Articles": indexArticles, "CreatedTime": now})
-	mainRssTemplate.Execute(rssIndexBuffer, map[string]interface{}{"Title": blogTitle, "Home": true, "Root": *siteRoot, "File": "index.xml", "Articles": feedArticles, "CreatedTime": &now})
-	mainRssTemplate.Execute(snippetrssIndexBuffer, map[string]interface{}{"Title": blogTitle, "Home": true, "Root": *siteRoot, "File": "snippets.xml", "Articles": snippetArticles, "CreatedTime": &now})
+	mainTemplate.Execute(indexBuffer, map[string]interface{}{
+		"Title":       blogTitle,
+		"Home":        true,
+		"Root":        *siteRoot,
+		"Articles":    indexArticles,
+		"CreatedTime": now,
+	})
+
+	mainRssTemplate.Execute(rssIndexBuffer, map[string]interface{}{
+		"Title":       blogTitle,
+		"Home":        true,
+		"Root":        *siteRoot,
+		"File":        "index.xml",
+		"Articles":    feedArticles,
+		"CreatedTime": &now,
+	})
+
+	mainRssTemplate.Execute(snippetrssIndexBuffer, map[string]interface{}{
+		"Title":       blogTitle,
+		"Home":        true,
+		"Root":        *siteRoot,
+		"File":        "snippets.xml",
+		"Articles":    snippetArticles,
+		"CreatedTime": &now,
+	})
 
 	for _, article := range articles {
 
@@ -248,7 +272,7 @@ func generate() {
 	for tag := range tags {
 
 		tagIndexBuffer := bytes.NewBufferString("")
-		var tagArticles Articles
+		var tagArticles post.Articles
 
 		for _, article := range indexArticles {
 
@@ -259,19 +283,73 @@ func generate() {
 			tagArticles = append(tagArticles, article)
 		}
 
-		mainTemplate.Execute(tagIndexBuffer, map[string]interface{}{"Articles": tagArticles, "Title": "Tag: " + tag + " – " + *blogTitle, "Home": false, "Root": *siteRoot})
+		mainTemplate.Execute(tagIndexBuffer, map[string]interface{}{
+			"Articles": tagArticles,
+			"Title":    "Tag: " + tag + " – " + *blogTitle,
+			"Home":     false,
+			"Root":     *siteRoot,
+		})
 
 		tagIndexFileName := path.Join(destinationDir.Name(), "tag-"+tag+*destinationExt)
 		ioutil.WriteFile(tagIndexFileName, tagIndexBuffer.Bytes(), os.ModePerm)
 	}
 }
 
-func main() {
+func watch() {
+	watcher, err := fsnotify.NewWatcher()
+	if err != nil {
+		log.Fatal("Couldn't watch the post directories")
+	}
+	defer watcher.Close()
 
+	watcherDone := make(chan bool)
+	go func() {
+		for {
+			select {
+			case event := <-watcher.Events:
+				if event.Op&fsnotify.Write == fsnotify.Write {
+					log.Println("Modified file: ", event.Name)
+					generate()
+				}
+			case err := <-watcher.Errors:
+				log.Println("Got error:", err)
+			}
+		}
+	}()
+
+	var watchedDirs []string
+
+	for _, postDir := range strings.Split(*postsPath, ",") {
+
+		walkFunc := func(filepath string, info os.FileInfo, err error) error {
+			if !info.IsDir() {
+				return nil
+			}
+
+			watchedDirs = append(watchedDirs, filepath)
+
+			return nil
+		}
+
+		filepath.Walk(postDir, walkFunc)
+	}
+
+	watchedDirs = append(watchedDirs, *templatesPath)
+
+	for _, watchedDir := range watchedDirs {
+		watcher.Add(watchedDir)
+	}
+
+	log.Printf("Listening to changes in directories: %s…", strings.Join(watchedDirs, ", "))
+
+	<-watcherDone
+}
+
+func main() {
 	flag.Parse()
 
 	if *templatePrint != "" {
-		var article Article
+		var article post.Article
 		now := time.Now().Add(15 * time.Minute)
 		article.DateModified = &now
 
@@ -284,14 +362,14 @@ func main() {
 		switch *templatePrint {
 		case "page":
 			article.Title = "Hello world"
-			article.Type = Page
+			article.Type = post.Page
 			break
 		case "post":
 			article.Title = "Blog post"
-			article.Type = Post
+			article.Type = post.Post
 			break
 		case "snippet":
-			article.Type = Snippet
+			article.Type = post.Snippet
 			break
 		default:
 			log.Fatal("post, snippet and page are the only allowed parameters for -print")
@@ -305,52 +383,6 @@ func main() {
 	generate()
 
 	if *listen {
-		watcher, err := fsnotify.NewWatcher()
-		if err != nil {
-			log.Fatal("Couldn't watch the post directories")
-		}
-		defer watcher.Close()
-
-		watcherDone := make(chan bool)
-		go func() {
-			for {
-				select {
-				case event := <-watcher.Events:
-					if event.Op&fsnotify.Write == fsnotify.Write {
-						log.Println("Modified file: ", event.Name)
-						generate()
-					}
-				case err := <-watcher.Errors:
-					log.Println("Got error:", err)
-				}
-			}
-		}()
-
-		var watchedDirs []string
-
-		for _, postDir := range strings.Split(*postsPath, ",") {
-
-			walkFunc := func(filepath string, info os.FileInfo, err error) error {
-				if !info.IsDir() {
-					return nil
-				}
-
-				watchedDirs = append(watchedDirs, filepath)
-
-				return nil
-			}
-
-			filepath.Walk(postDir, walkFunc)
-		}
-
-		watchedDirs = append(watchedDirs, *templatesPath)
-
-		for _, watchedDir := range watchedDirs {
-			watcher.Add(watchedDir)
-		}
-
-		log.Printf("Listening to changes in directories: %s…", strings.Join(watchedDirs, ", "))
-
-		<-watcherDone
+		watch()
 	}
 }
