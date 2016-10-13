@@ -315,7 +315,7 @@ func watch() {
 		for {
 			select {
 			case event := <-watcher.Events:
-				if event.Op&fsnotify.Write == fsnotify.Write {
+				if (event.Op&fsnotify.Write == fsnotify.Write) || (event.Op&fsnotify.Create == fsnotify.Create) {
 					log.Println("Modified file: ", event.Name)
 					generate()
 				}
