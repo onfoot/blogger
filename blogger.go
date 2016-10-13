@@ -7,6 +7,7 @@ import (
 	"io/ioutil"
 	"log"
 	"os"
+	"os/user"
 	"path"
 	"path/filepath"
 	"sort"
@@ -86,7 +87,14 @@ func generate() {
 
 	sourceFiles := []PostFile{}
 
+	user, _ := user.Current()
+	homedir := user.HomeDir
+
 	for _, postDir := range strings.Split(*postsPath, ",") {
+
+		if postDir[:2] == "~/" {
+			postDir = strings.Replace(postDir, "~", homedir, 1)
+		}
 
 		walkFunc := func(filepath string, info os.FileInfo, err error) error {
 			if err != nil {
@@ -319,9 +327,20 @@ func watch() {
 
 	var watchedDirs []string
 
+	user, _ := user.Current()
+	homedir := user.HomeDir
+
 	for _, postDir := range strings.Split(*postsPath, ",") {
 
+		if postDir[:2] == "~/" {
+			postDir = strings.Replace(postDir, "~", homedir, 1)
+		}
+
 		walkFunc := func(filepath string, info os.FileInfo, err error) error {
+			if err != nil {
+				return nil
+			}
+
 			if !info.IsDir() {
 				return nil
 			}
