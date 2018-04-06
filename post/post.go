@@ -31,6 +31,19 @@ const (
 	IFTTTDateFormat = "January 02, 2006 at 03:04PM"
 )
 
+type Tag struct {
+	Name   string
+	Hidden bool
+}
+
+func MakeTag(tag string) Tag {
+	prepared := strings.ToLower(tag)
+	trimmed := strings.TrimPrefix(tag, "-")
+	hidden := trimmed != prepared
+
+	return Tag{Name: trimmed, Hidden: hidden}
+}
+
 // Article represents a blogger post, page or a snippet. Contains information useful for blog publishing.
 type Article struct {
 	Author       string
@@ -46,7 +59,7 @@ type Article struct {
 	Snippet      bool
 	Type         PageType
 	Draft        bool
-	Tags         []string
+	Tags         []Tag
 	AppID        string
 	Meta         map[string]string
 }
@@ -54,12 +67,22 @@ type Article struct {
 // HasTag checks if the given article contains a certain tag
 func (a Article) HasTag(aTag string) bool {
 	for _, tag := range a.Tags {
-		if aTag == tag {
+		if aTag == tag.Name {
 			return true
 		}
 	}
 
 	return false
+}
+
+func (a Article) VisibleTags() []Tag {
+	tags := make([]Tag, 0)
+	for _, tag := range a.Tags {
+		if !tag.Hidden {
+			tags = append(tags, tag)
+		}
+	}
+	return tags
 }
 
 // BasePath returns a base path for the given article, relative to blog root path
@@ -269,7 +292,7 @@ func ReadArticle(reader *bufio.Reader) (Article, error) {
 			}
 
 			for _, tag := range strings.FieldsFunc(value, fieldsFunc) {
-				article.Tags = append(article.Tags, strings.ToLower(tag))
+				article.Tags = append(article.Tags, MakeTag(tag))
 			}
 		}
 	}

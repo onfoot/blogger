@@ -255,7 +255,7 @@ func generate() {
 		})
 
 		for _, tag := range article.Tags {
-			tags[tag] = true
+			tags[tag.Name] = true
 		}
 
 		destinationFileName := path.Join(destinationDir.Name(), article.FullPath())
