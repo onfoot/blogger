@@ -33,6 +33,7 @@ const (
 
 type Tag struct {
 	Name   string
+	OriginalName string
 	Hidden bool
 }
 
@@ -41,7 +42,7 @@ func MakeTag(tag string) Tag {
 	trimmed := strings.TrimPrefix(prepared, "-")
 	hidden := trimmed != prepared
 
-	return Tag{Name: trimmed, Hidden: hidden}
+	return Tag{Name: trimmed, OriginalName: tag, Hidden: hidden}
 }
 
 func (t Tag) FileName() string {

@@ -31,6 +31,7 @@ var siteRoot = flag.String("root", "/", "Site root path")
 var templatePrint = flag.String("print", "", "Print out a template for a snippet, blog post or a page")
 var templateAuthor = flag.String("author", "", "Set a default post author")
 var listen = flag.Bool("listen", false, "Listen to changes in post directories and regenerate")
+var tagfeeds = flag.String("tagfeeds", "", "Generate RSS feeds for specified tags (comma-separated)")
 
 const templateFileName = "template.html"
 const rssTemplateFileName = "rsstemplate.html"
@@ -277,6 +278,13 @@ func generate() {
 	ioutil.WriteFile(rssIndexFileName, rssIndexBuffer.Bytes(), os.ModePerm)
 	ioutil.WriteFile(snippetIndexFileName, snippetrssIndexBuffer.Bytes(), os.ModePerm)
 
+	tagFeedsEnabled := map[string]bool{}
+
+	for _, tagEnabled := range strings.Split(*tagfeeds, ",") {
+		tagFeedsEnabled[tagEnabled] = true
+	}
+
+
 	for tag := range tags {
 
 		tagIndexBuffer := bytes.NewBufferString("")
@@ -297,6 +305,23 @@ func generate() {
 			"Home":     false,
 			"Root":     *siteRoot,
 		})
+
+
+		if tagFeedsEnabled[tag.OriginalName] {
+			tagFeedBuffer := bytes.NewBufferString("")
+
+			mainRssTemplate.Execute(tagFeedBuffer, map[string]interface{}{
+				"Title":       blogTitle,
+				"Home":        true,
+				"Root":        *siteRoot,
+				"File":        "index-tag-" + tag.FileName() + ".xml",
+				"Articles":    tagArticles,
+				"CreatedTime": &now,
+			})
+
+			tagFeedFileName := path.Join(destinationDir.Name(), "index-tag-"+tag.FileName()+".xml")
+			ioutil.WriteFile(tagFeedFileName, tagFeedBuffer.Bytes(), os.ModePerm)
+		}
 
 		tagIndexFileName := path.Join(destinationDir.Name(), "tag-"+tag.FileName()+*destinationExt)
 		ioutil.WriteFile(tagIndexFileName, tagIndexBuffer.Bytes(), os.ModePerm)
