@@ -38,10 +38,18 @@ type Tag struct {
 
 func MakeTag(tag string) Tag {
 	prepared := strings.ToLower(tag)
-	trimmed := strings.TrimPrefix(tag, "-")
+	trimmed := strings.TrimPrefix(prepared, "-")
 	hidden := trimmed != prepared
 
 	return Tag{Name: trimmed, Hidden: hidden}
+}
+
+func (t Tag) FileName() string {
+	if t.Hidden {
+		return strings.Join([]string{"_", t.Name}, "")
+		} else {
+		return t.Name
+		}
 }
 
 // Article represents a blogger post, page or a snippet. Contains information useful for blog publishing.

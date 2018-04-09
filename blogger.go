@@ -205,7 +205,7 @@ func generate() {
 		indexArticles = append(indexArticles, &article)
 	}
 
-	tags := map[string]bool{}
+	tags := map[post.Tag]bool{}
 
 	sort.Sort(articles)
 	sort.Sort(indexArticles)
@@ -255,7 +255,7 @@ func generate() {
 		})
 
 		for _, tag := range article.Tags {
-			tags[tag.Name] = true
+			tags[tag] = true
 		}
 
 		destinationFileName := path.Join(destinationDir.Name(), article.FullPath())
@@ -284,7 +284,7 @@ func generate() {
 
 		for _, article := range indexArticles {
 
-			if !article.HasTag(tag) {
+			if !article.HasTag(tag.Name) {
 				continue
 			}
 
@@ -293,12 +293,12 @@ func generate() {
 
 		mainTemplate.Execute(tagIndexBuffer, map[string]interface{}{
 			"Articles": tagArticles,
-			"Title":    "Tag: " + tag + " – " + *blogTitle,
+			"Title":    "Tag: " + tag.Name + " – " + *blogTitle,
 			"Home":     false,
 			"Root":     *siteRoot,
 		})
 
-		tagIndexFileName := path.Join(destinationDir.Name(), "tag-"+tag+*destinationExt)
+		tagIndexFileName := path.Join(destinationDir.Name(), "tag-"+tag.FileName()+*destinationExt)
 		ioutil.WriteFile(tagIndexFileName, tagIndexBuffer.Bytes(), os.ModePerm)
 	}
 }
