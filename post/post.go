@@ -19,9 +19,9 @@ const (
 	// Post - A regular blog article
 	Post PageType = "Post"
 	// Page - A site-wide page
-	Page = "Page"
+	Page PageType = "Page"
 	// Snippet - Twitter-like short blog post
-	Snippet = "Snippet"
+	Snippet PageType = "Snippet"
 )
 
 const (
@@ -31,12 +31,14 @@ const (
 	IFTTTDateFormat = "January 02, 2006 at 03:04PM"
 )
 
+// Tag represents a post tag, optionally hidden from public tag listings.
 type Tag struct {
-	Name   string
+	Name         string
 	OriginalName string
-	Hidden bool
+	Hidden       bool
 }
 
+// MakeTag parses a raw tag string into a Tag, treating a leading "-" as hidden.
 func MakeTag(tag string) Tag {
 	prepared := strings.ToLower(tag)
 	trimmed := strings.TrimPrefix(prepared, "-")
@@ -45,12 +47,12 @@ func MakeTag(tag string) Tag {
 	return Tag{Name: trimmed, OriginalName: tag, Hidden: hidden}
 }
 
+// FileName returns a filesystem-safe name for the tag.
 func (t Tag) FileName() string {
 	if t.Hidden {
-		return strings.Join([]string{"_", t.Name}, "")
-		} else {
-		return t.Name
-		}
+		return "_" + t.Name
+	}
+	return t.Name
 }
 
 // Article represents a blogger post, page or a snippet. Contains information useful for blog publishing.
@@ -65,7 +67,6 @@ type Article struct {
 	Filename     string
 	Link         string
 	Identifier   string
-	Snippet      bool
 	Type         PageType
 	Draft        bool
 	Tags         []Tag
@@ -73,7 +74,7 @@ type Article struct {
 	Meta         map[string]string
 }
 
-// HasTag checks if the given article contains a certain tag
+// HasTag checks if the given article contains a certain tag.
 func (a Article) HasTag(aTag string) bool {
 	for _, tag := range a.Tags {
 		if aTag == tag.Name {
@@ -84,6 +85,7 @@ func (a Article) HasTag(aTag string) bool {
 	return false
 }
 
+// VisibleTags returns only the tags that are not hidden.
 func (a Article) VisibleTags() []Tag {
 	tags := make([]Tag, 0)
 	for _, tag := range a.Tags {
@@ -94,7 +96,7 @@ func (a Article) VisibleTags() []Tag {
 	return tags
 }
 
-// BasePath returns a base path for the given article, relative to blog root path
+// BasePath returns a base path for the given article, relative to blog root path.
 func (a Article) BasePath() string {
 	switch a.Type {
 	case Post, Snippet:
@@ -109,12 +111,12 @@ func (a Article) BasePath() string {
 	return path.Join(strconv.Itoa(a.DateModified.Year()), fmt.Sprintf("%02d", int(a.DateModified.Month())))
 }
 
-// FullPath combines BasePath with articles file name
+// FullPath combines BasePath with the article's file name.
 func (a Article) FullPath() string {
 	return path.Join(a.BasePath(), a.Filename)
 }
 
-// Articles is an convenience type alias for article slice
+// Articles is a convenience type alias for article slice.
 type Articles []*Article
 
 func (a Articles) Len() int {
@@ -132,7 +134,7 @@ func (a Articles) Less(i, j int) bool {
 	return right.Before(left)
 }
 
-// Print sends an article header in plain text to standard output
+// Print sends an article header in plain text to standard output.
 func (a Article) Print() {
 	fmt.Println("---")
 
@@ -159,7 +161,7 @@ func (a Article) Print() {
 	}
 
 	if a.DateUpdated != nil {
-		fmt.Printf("date: %v\n", a.DateUpdated.Format(DefaultDateFormat))
+		fmt.Printf("updated: %v\n", a.DateUpdated.Format(DefaultDateFormat))
 	}
 
 	if len(a.AppID) > 0 {
@@ -170,27 +172,24 @@ func (a Article) Print() {
 		fmt.Printf("draft: true\n")
 	}
 
-	if a.Meta != nil {
-	}
-
 	fmt.Println("---")
 	fmt.Println("")
 }
 
-// ParseFrontMatter reads the front matter-type article header
+// ParseFrontMatter reads the front matter-type article header.
 func ParseFrontMatter(reader *bufio.Reader) (map[string]string, error) {
 
 	data := make(map[string]string)
 
-	line, lineErr := reader.ReadString('\n')
+	line, _ := reader.ReadString('\n')
 
 	if !strings.HasPrefix(line, "---") {
-		return data, errors.New("Invalid front matter header")
+		return data, errors.New("invalid front matter header")
 	}
 
 	for {
-		line, lineErr = reader.ReadString('\n')
-		if lineErr != nil {
+		line, err := reader.ReadString('\n')
+		if err != nil {
 			break
 		}
 
@@ -215,14 +214,14 @@ func ParseFrontMatter(reader *bufio.Reader) (map[string]string, error) {
 	return data, nil
 }
 
-// ReadArticle returns an article read from a Reader
+// ReadArticle returns an article read from a Reader.
 func ReadArticle(reader *bufio.Reader) (Article, error) {
 	article := Article{}
 
 	frontMatter, matterErr := ParseFrontMatter(reader)
 
 	if matterErr != nil {
-		return article, errors.New("Invalid article header")
+		return article, errors.New("invalid article header")
 	}
 
 	for key, value := range frontMatter {
@@ -246,40 +245,34 @@ func ReadArticle(reader *bufio.Reader) (Article, error) {
 		case "link":
 			article.Link = value
 		case "date":
-			dateStr := value
-			modTime, timeErr := time.Parse(DefaultDateFormat, dateStr)
+			modTime, timeErr := time.Parse(DefaultDateFormat, value)
 			if timeErr == nil {
 				article.DateModified = &modTime
 				break
 			}
 
-			modTime, timeErr = time.Parse(IFTTTDateFormat, dateStr)
+			modTime, timeErr = time.Parse(IFTTTDateFormat, value)
 			if timeErr == nil {
 				article.DateModified = &modTime
 				break
 			}
 
-			if timeErr != nil {
-				return article, timeErr
-			}
+			return article, timeErr
 
 		case "updated":
-			dateStr := value
-			modTime, timeErr := time.Parse(DefaultDateFormat, dateStr)
+			modTime, timeErr := time.Parse(DefaultDateFormat, value)
 			if timeErr == nil {
 				article.DateUpdated = &modTime
 				break
 			}
 
-			modTime, timeErr = time.Parse(IFTTTDateFormat, dateStr)
+			modTime, timeErr = time.Parse(IFTTTDateFormat, value)
 			if timeErr == nil {
 				article.DateUpdated = &modTime
 				break
 			}
 
-			if timeErr != nil {
-				return article, timeErr
-			}
+			return article, timeErr
 
 		case "appid":
 			article.AppID = value
