@@ -15,7 +15,10 @@ import (
 	"text/template"
 	"time"
 
+	"net/http"
+
 	"github.com/macbirdie/blogger/auth"
+	"github.com/macbirdie/blogger/micropub"
 	"github.com/macbirdie/blogger/post"
 
 	blackfriday "github.com/russross/blackfriday/v2"
@@ -39,6 +42,7 @@ var dbPath = flag.String("db", "blogger.db", "SQLite database path for auth/user
 var addUser = flag.String("adduser", "", "Add a new user to the auth database (prompts for password)")
 var updateUser = flag.String("updateuser", "", "Update an existing user's password (prompts for password)")
 var listUsers = flag.Bool("listusers", false, "List all users in the auth database")
+var serveAddr = flag.String("serve", "", "Start Micropub HTTP server on this address (e.g. :8080)")
 
 const templateFileName = "template.html"
 const rssTemplateFileName = "rsstemplate.html"
@@ -497,6 +501,36 @@ func main() {
 	}
 
 	generate()
+
+	if *serveAddr != "" {
+		db, err := auth.OpenDB(*dbPath)
+		if err != nil {
+			log.Fatalf("Could not open auth database for server: %v", err)
+		}
+		defer db.Close()
+
+		// Use the first posts directory as the write target for new posts.
+		firstPostsDir := expandHomePath(strings.TrimSpace(strings.SplitN(*postsPath, ",", 2)[0]))
+
+		srv := &micropub.Server{
+			DB:       db,
+			PostsDir: firstPostsDir,
+			SiteRoot: *siteRoot,
+			DestExt:  *destinationExt,
+			OnChange: generate,
+		}
+
+		if *listen {
+			// Run the file watcher in a goroutine so the HTTP server can block.
+			go watch()
+		}
+
+		log.Printf("Micropub server listening on %s", *serveAddr)
+		if err := http.ListenAndServe(*serveAddr, srv.Handler()); err != nil {
+			log.Fatalf("Micropub server: %v", err)
+		}
+		return
+	}
 
 	if *listen {
 		watch()

@@ -1,0 +1,685 @@
+// Package micropub implements a Micropub (https://micropub.spec.indieweb.org/)
+// endpoint that writes posts as Markdown files into the blogger posts directory.
+package micropub
+
+import (
+	"bufio"
+	"database/sql"
+	"encoding/json"
+	"fmt"
+	"log"
+	"net/http"
+	"net/url"
+	"os"
+	"path/filepath"
+	"regexp"
+	"strings"
+	"time"
+
+	"github.com/macbirdie/blogger/auth"
+	"github.com/macbirdie/blogger/post"
+)
+
+// Server is a Micropub server that writes posts to disk as Markdown files.
+type Server struct {
+	DB       *sql.DB
+	PostsDir string // directory where new post files are written
+	SiteRoot string // e.g. "https://example.com/"
+	DestExt  string // e.g. ".html" or ""
+	OnChange func() // called (in a goroutine) after any write
+}
+
+// Handler returns an http.Handler serving the Micropub and token endpoints.
+func (s *Server) Handler() http.Handler {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/micropub", s.handleMicropub)
+	mux.HandleFunc("/micropub/token", s.handleToken)
+	return mux
+}
+
+// ── Token endpoint ────────────────────────────────────────────────────────────
+
+// handleToken issues Bearer tokens via a simple password grant.
+//
+// POST /micropub/token
+//
+//	grant_type=password&username=alice&password=secret
+func (s *Server) handleToken(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "bad request", http.StatusBadRequest)
+		return
+	}
+
+	if r.FormValue("grant_type") != "password" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{
+			"error":             "unsupported_grant_type",
+			"error_description": "only password grant type is supported",
+		})
+		return
+	}
+
+	ok, err := auth.ValidateCredentials(s.DB, r.FormValue("username"), r.FormValue("password"))
+	if err != nil || !ok {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{
+			"error":             "invalid_client",
+			"error_description": "invalid credentials",
+		})
+		return
+	}
+
+	token, err := auth.CreateToken(s.DB, r.FormValue("username"))
+	if err != nil {
+		log.Printf("micropub: create token: %v", err)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{
+		"access_token": token,
+		"token_type":   "Bearer",
+		"scope":        "create update delete",
+		"me":           s.SiteRoot,
+	})
+}
+
+// ── Micropub endpoint ─────────────────────────────────────────────────────────
+
+func (s *Server) handleMicropub(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		s.handleQuery(w, r)
+	case http.MethodPost:
+		if !s.authenticated(r) {
+			w.Header().Set("WWW-Authenticate", `Bearer realm="Micropub"`)
+			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+			return
+		}
+		s.handlePost(w, r)
+	default:
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+func (s *Server) authenticated(r *http.Request) bool {
+	token := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
+	if token == "" {
+		token = r.FormValue("access_token")
+	}
+	if token == "" {
+		return false
+	}
+	username, err := auth.ValidateToken(s.DB, token)
+	return err == nil && username != ""
+}
+
+func (s *Server) handleQuery(w http.ResponseWriter, r *http.Request) {
+	switch r.URL.Query().Get("q") {
+	case "config":
+		writeJSON(w, http.StatusOK, map[string]interface{}{
+			"media-endpoint": nil,
+			"syndicate-to":   []interface{}{},
+		})
+	default:
+		writeJSON(w, http.StatusOK, map[string]interface{}{})
+	}
+}
+
+// ── Request parsing ───────────────────────────────────────────────────────────
+
+type mpRequest struct {
+	Action     string
+	URL        string
+	HType      string // e.g. "entry", "page" (h- prefix stripped)
+	Properties map[string][]interface{}
+	Replace    map[string][]interface{}
+	Add        map[string][]interface{}
+	Delete     interface{}
+}
+
+func (s *Server) handlePost(w http.ResponseWriter, r *http.Request) {
+	var req mpRequest
+	var err error
+
+	if strings.Contains(r.Header.Get("Content-Type"), "application/json") {
+		err = parseJSON(r, &req)
+	} else {
+		err = parseForm(r, &req)
+	}
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{
+			"error": "invalid_request", "error_description": err.Error(),
+		})
+		return
+	}
+
+	switch req.Action {
+	case "", "create":
+		s.create(w, &req)
+	case "update":
+		s.update(w, &req)
+	case "delete":
+		s.softDelete(w, &req)
+	default:
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "unknown action"})
+	}
+}
+
+func parseJSON(r *http.Request, req *mpRequest) error {
+	var body map[string]json.RawMessage
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		return err
+	}
+
+	str := func(key string) string {
+		raw, ok := body[key]
+		if !ok {
+			return ""
+		}
+		var s string
+		json.Unmarshal(raw, &s) //nolint:errcheck
+		return s
+	}
+
+	req.Action = str("action")
+	req.URL = str("url")
+
+	if raw, ok := body["type"]; ok {
+		var types []string
+		if json.Unmarshal(raw, &types) == nil && len(types) > 0 {
+			req.HType = strings.TrimPrefix(types[0], "h-")
+		}
+	}
+	if req.HType == "" {
+		req.HType = "entry"
+	}
+
+	rawProps := func(key string) map[string][]interface{} {
+		raw, ok := body[key]
+		if !ok {
+			return nil
+		}
+		var m map[string]interface{}
+		if json.Unmarshal(raw, &m) != nil {
+			return nil
+		}
+		return normalizeProps(m)
+	}
+
+	req.Properties = rawProps("properties")
+	req.Replace = rawProps("replace")
+	req.Add = rawProps("add")
+
+	if raw, ok := body["delete"]; ok {
+		var v interface{}
+		json.Unmarshal(raw, &v) //nolint:errcheck
+		req.Delete = v
+	}
+	return nil
+}
+
+func parseForm(r *http.Request, req *mpRequest) error {
+	if err := r.ParseForm(); err != nil {
+		return err
+	}
+	req.Action = r.FormValue("action")
+	req.URL = r.FormValue("url")
+	req.HType = strings.TrimPrefix(r.FormValue("h"), "h-")
+	if req.HType == "" {
+		req.HType = "entry"
+	}
+
+	skip := map[string]bool{"h": true, "action": true, "url": true, "access_token": true}
+	req.Properties = make(map[string][]interface{})
+	for key, values := range r.Form {
+		if skip[key] {
+			continue
+		}
+		norm := strings.TrimSuffix(key, "[]")
+		var ifaces []interface{}
+		for _, v := range values {
+			ifaces = append(ifaces, v)
+		}
+		req.Properties[norm] = ifaces
+	}
+	return nil
+}
+
+func normalizeProps(m map[string]interface{}) map[string][]interface{} {
+	out := make(map[string][]interface{})
+	for k, v := range m {
+		switch val := v.(type) {
+		case []interface{}:
+			out[k] = val
+		default:
+			out[k] = []interface{}{v}
+		}
+	}
+	return out
+}
+
+// ── Property helpers ──────────────────────────────────────────────────────────
+
+// strProp returns the first value of a property as a string.
+// Content objects ({html:…} or {markdown:…}) are unwrapped.
+func strProp(props map[string][]interface{}, key string) string {
+	vals, ok := props[key]
+	if !ok || len(vals) == 0 {
+		return ""
+	}
+	switch v := vals[0].(type) {
+	case string:
+		return v
+	case map[string]interface{}:
+		if md, ok := v["markdown"].(string); ok {
+			return md
+		}
+		if html, ok := v["html"].(string); ok {
+			return html
+		}
+	}
+	return fmt.Sprintf("%v", vals[0])
+}
+
+func strsProp(props map[string][]interface{}, key string) []string {
+	vals, ok := props[key]
+	if !ok {
+		return nil
+	}
+	out := make([]string, len(vals))
+	for i, v := range vals {
+		out[i] = fmt.Sprintf("%v", v)
+	}
+	return out
+}
+
+var slugRe = regexp.MustCompile(`[^a-z0-9]+`)
+
+func slugify(s string) string {
+	s = strings.ToLower(s)
+	s = slugRe.ReplaceAllString(s, "-")
+	return strings.Trim(s, "-")
+}
+
+// uniqueSlug returns a slug that does not collide with any existing file in dir.
+// If <slug>.md is free it is returned unchanged; otherwise a timestamp suffix
+// is appended: <slug>-20060102-150405, <slug>-20060102-150405-2, etc.
+func uniqueSlug(dir, slug string) string {
+	candidate := slug
+	if !slugExists(dir, candidate) {
+		return candidate
+	}
+	base := slug + "-" + time.Now().Format("20060102-150405")
+	candidate = base
+	for n := 2; slugExists(dir, candidate); n++ {
+		candidate = fmt.Sprintf("%s-%d", base, n)
+	}
+	return candidate
+}
+
+// slugExists returns true when any file named <slug>.<ext> exists in dir.
+func slugExists(dir, slug string) bool {
+	for _, ext := range []string{".md", ".markdown", ".txt"} {
+		if _, err := os.Stat(filepath.Join(dir, slug+ext)); err == nil {
+			return true
+		}
+	}
+	return false
+}
+
+// ── Create ────────────────────────────────────────────────────────────────────
+
+func (s *Server) create(w http.ResponseWriter, req *mpRequest) {
+	props := req.Properties
+
+	title := strProp(props, "name")
+	content := strProp(props, "content")
+	tags := strsProp(props, "category")
+	isDraft := strProp(props, "post-status") == "draft"
+	customSlug := strProp(props, "mp-slug")
+	publishedStr := strProp(props, "published")
+
+	articleType := post.Post
+	switch req.HType {
+	case "page":
+		articleType = post.Page
+	case "entry":
+		if title == "" {
+			articleType = post.Snippet
+		}
+	}
+
+	var pubTime time.Time
+	if publishedStr != "" {
+		if t, err := time.Parse(time.RFC3339, publishedStr); err == nil {
+			pubTime = t
+		}
+	}
+	if pubTime.IsZero() {
+		pubTime = time.Now()
+	}
+
+	// Build a desired slug then guarantee it is unique in the posts directory.
+	desiredSlug := customSlug
+	if desiredSlug == "" && title != "" {
+		desiredSlug = slugify(title)
+	}
+	if desiredSlug == "" {
+		desiredSlug = pubTime.Format("20060102-150405")
+	}
+	slug := uniqueSlug(s.PostsDir, desiredSlug)
+	if slug != desiredSlug {
+		log.Printf("micropub: slug %q already exists, using %q instead", desiredSlug, slug)
+	}
+
+	a := post.Article{
+		Title:        title,
+		Type:         articleType,
+		DateModified: &pubTime,
+		Draft:        isDraft,
+		RawContent:   []byte(content),
+	}
+	for _, t := range tags {
+		a.Tags = append(a.Tags, post.MakeTag(t))
+	}
+
+	destPath := filepath.Join(s.PostsDir, slug+".md")
+	if err := os.WriteFile(destPath, []byte(formatArticle(a)), 0644); err != nil {
+		log.Printf("micropub: write %s: %v", destPath, err)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+
+	log.Printf("micropub: created %s", destPath)
+	if s.OnChange != nil {
+		go s.OnChange()
+	}
+
+	w.Header().Set("Location", s.postURL(slug, pubTime, isDraft))
+	w.WriteHeader(http.StatusCreated)
+}
+
+// ── Update ────────────────────────────────────────────────────────────────────
+
+func (s *Server) update(w http.ResponseWriter, req *mpRequest) {
+	if req.URL == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "url required for update"})
+		return
+	}
+
+	srcPath, err := s.findSourceFile(req.URL)
+	if err != nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "post not found"})
+		return
+	}
+
+	a, err := readArticleFile(srcPath)
+	if err != nil {
+		log.Printf("micropub: read %s: %v", srcPath, err)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+
+	applyReplace(a, req.Replace)
+	applyAdd(a, req.Add)
+	applyDelete(a, req.Delete)
+
+	if err := os.WriteFile(srcPath, []byte(formatArticle(*a)), 0644); err != nil {
+		log.Printf("micropub: write %s: %v", srcPath, err)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+
+	log.Printf("micropub: updated %s", srcPath)
+	if s.OnChange != nil {
+		go s.OnChange()
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func applyReplace(a *post.Article, props map[string][]interface{}) {
+	for prop, vals := range props {
+		setProp(a, prop, vals)
+	}
+}
+
+func applyAdd(a *post.Article, props map[string][]interface{}) {
+	for prop, vals := range props {
+		if prop == "category" {
+			for _, v := range vals {
+				a.Tags = append(a.Tags, post.MakeTag(fmt.Sprintf("%v", v)))
+			}
+		}
+	}
+}
+
+func applyDelete(a *post.Article, del interface{}) {
+	switch d := del.(type) {
+	case []interface{}:
+		for _, prop := range d {
+			clearProp(a, fmt.Sprintf("%v", prop))
+		}
+	case map[string]interface{}:
+		for prop, rawVals := range d {
+			if prop == "category" {
+				if vSlice, ok := rawVals.([]interface{}); ok {
+					removeTagValues(a, vSlice)
+				}
+			}
+		}
+	}
+}
+
+func setProp(a *post.Article, prop string, vals []interface{}) {
+	if len(vals) == 0 {
+		return
+	}
+	switch prop {
+	case "name":
+		a.Title = fmt.Sprintf("%v", vals[0])
+	case "content":
+		switch v := vals[0].(type) {
+		case string:
+			a.RawContent = []byte(v)
+		case map[string]interface{}:
+			if md, ok := v["markdown"].(string); ok {
+				a.RawContent = []byte(md)
+			} else if html, ok := v["html"].(string); ok {
+				a.RawContent = []byte(html)
+			}
+		}
+	case "category":
+		a.Tags = nil
+		for _, v := range vals {
+			a.Tags = append(a.Tags, post.MakeTag(fmt.Sprintf("%v", v)))
+		}
+	case "published":
+		if t, err := time.Parse(time.RFC3339, fmt.Sprintf("%v", vals[0])); err == nil {
+			a.DateModified = &t
+		}
+	case "updated":
+		if t, err := time.Parse(time.RFC3339, fmt.Sprintf("%v", vals[0])); err == nil {
+			a.DateUpdated = &t
+		}
+	case "post-status":
+		a.Draft = fmt.Sprintf("%v", vals[0]) == "draft"
+	case "summary":
+		a.Description = fmt.Sprintf("%v", vals[0])
+	}
+}
+
+func clearProp(a *post.Article, prop string) {
+	switch prop {
+	case "name":
+		a.Title = ""
+	case "category":
+		a.Tags = nil
+	case "summary":
+		a.Description = ""
+	case "updated":
+		a.DateUpdated = nil
+	}
+}
+
+func removeTagValues(a *post.Article, vals []interface{}) {
+	remove := make(map[string]bool, len(vals))
+	for _, v := range vals {
+		remove[strings.ToLower(fmt.Sprintf("%v", v))] = true
+	}
+	kept := a.Tags[:0]
+	for _, t := range a.Tags {
+		if !remove[t.Name] {
+			kept = append(kept, t)
+		}
+	}
+	a.Tags = kept
+}
+
+// ── Delete (soft) ─────────────────────────────────────────────────────────────
+
+// softDelete sets draft: true instead of removing the file so the post can be
+// recovered. The static output is regenerated, removing it from the site.
+func (s *Server) softDelete(w http.ResponseWriter, req *mpRequest) {
+	if req.URL == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "url required for delete"})
+		return
+	}
+
+	srcPath, err := s.findSourceFile(req.URL)
+	if err != nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "post not found"})
+		return
+	}
+
+	a, err := readArticleFile(srcPath)
+	if err != nil {
+		log.Printf("micropub: read %s: %v", srcPath, err)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+
+	a.Draft = true
+	if err := os.WriteFile(srcPath, []byte(formatArticle(*a)), 0644); err != nil {
+		log.Printf("micropub: write %s: %v", srcPath, err)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+
+	log.Printf("micropub: soft-deleted %s (draft: true)", srcPath)
+	if s.OnChange != nil {
+		go s.OnChange()
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// ── File helpers ──────────────────────────────────────────────────────────────
+
+// findSourceFile resolves a published URL back to its source Markdown file by
+// matching the slug (last path segment without extension) against filenames in
+// the posts directory tree.
+func (s *Server) findSourceFile(publishedURL string) (string, error) {
+	u, err := url.Parse(publishedURL)
+	if err != nil {
+		return "", fmt.Errorf("invalid url: %w", err)
+	}
+	base := filepath.Base(u.Path)
+	slug := strings.TrimSuffix(base, filepath.Ext(base))
+
+	var found string
+	_ = filepath.Walk(s.PostsDir, func(path string, info os.FileInfo, err error) error {
+		if err != nil || info.IsDir() {
+			return nil
+		}
+		name := info.Name()
+		for _, ext := range []string{".md", ".markdown", ".txt"} {
+			if strings.TrimSuffix(name, ext) == slug {
+				found = path
+				return filepath.SkipAll
+			}
+		}
+		return nil
+	})
+
+	if found == "" {
+		return "", fmt.Errorf("source file not found for slug %q", slug)
+	}
+	return found, nil
+}
+
+func readArticleFile(path string) (*post.Article, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	a, err := post.ReadArticle(bufio.NewReader(f))
+	return &a, err
+}
+
+func (s *Server) postURL(slug string, t time.Time, draft bool) string {
+	root := strings.TrimRight(s.SiteRoot, "/")
+	if draft {
+		return root + "/drafts/" + slug + s.DestExt
+	}
+	return root + fmt.Sprintf("/%d/%02d/%s%s", t.Year(), t.Month(), slug, s.DestExt)
+}
+
+// formatArticle serialises an Article back to the frontmatter+body file format.
+func formatArticle(a post.Article) string {
+	var sb strings.Builder
+	sb.WriteString("---\n")
+	if a.Title != "" {
+		fmt.Fprintf(&sb, "title: %s\n", a.Title)
+	}
+	if a.Author != "" {
+		fmt.Fprintf(&sb, "author: %s\n", a.Author)
+	}
+	switch a.Type {
+	case post.Post:
+		sb.WriteString("type: Post\n")
+	case post.Page:
+		sb.WriteString("type: Page\n")
+	case post.Snippet:
+		sb.WriteString("type: Snippet\n")
+	}
+	if a.DateModified != nil {
+		fmt.Fprintf(&sb, "date: %s\n", a.DateModified.Format(time.RFC3339))
+	}
+	if a.DateUpdated != nil {
+		fmt.Fprintf(&sb, "updated: %s\n", a.DateUpdated.Format(time.RFC3339))
+	}
+	if len(a.Tags) > 0 {
+		names := make([]string, len(a.Tags))
+		for i, t := range a.Tags {
+			names[i] = t.OriginalName
+		}
+		fmt.Fprintf(&sb, "tags: %s\n", strings.Join(names, ", "))
+	}
+	if a.Description != "" {
+		fmt.Fprintf(&sb, "description: %s\n", a.Description)
+	}
+	if a.Link != "" {
+		fmt.Fprintf(&sb, "link: %s\n", a.Link)
+	}
+	if a.AppID != "" {
+		fmt.Fprintf(&sb, "appid: %s\n", a.AppID)
+	}
+	if a.Draft {
+		sb.WriteString("draft: true\n")
+	}
+	for k, v := range a.Meta {
+		fmt.Fprintf(&sb, "meta-%s: %s\n", k, v)
+	}
+	sb.WriteString("---\n\n")
+	sb.Write(a.RawContent)
+	return sb.String()
+}
+
+func writeJSON(w http.ResponseWriter, status int, v interface{}) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	json.NewEncoder(w).Encode(v) //nolint:errcheck
+}
