@@ -342,13 +342,25 @@ func (s *Server) create(w http.ResponseWriter, req *mpRequest) {
 	customSlug := strProp(props, "mp-slug")
 	publishedStr := strProp(props, "published")
 
+	// mp-type (e.g. mp-type=snippet) takes precedence; otherwise the type is
+	// inferred from the h- value and whether a title is present (title-less
+	// h-entry → Snippet, matching how the blog renders lightweight tweet-like posts).
 	articleType := post.Post
-	switch req.HType {
+	switch strings.ToLower(strProp(props, "mp-type")) {
+	case "snippet":
+		articleType = post.Snippet
 	case "page":
 		articleType = post.Page
-	case "entry":
-		if title == "" {
-			articleType = post.Snippet
+	case "post":
+		articleType = post.Post
+	default:
+		switch req.HType {
+		case "page":
+			articleType = post.Page
+		case "entry":
+			if title == "" {
+				articleType = post.Snippet
+			}
 		}
 	}
 
@@ -506,6 +518,15 @@ func setProp(a *post.Article, prop string, vals []interface{}) {
 		}
 	case "post-status":
 		a.Draft = fmt.Sprintf("%v", vals[0]) == "draft"
+	case "mp-type":
+		switch strings.ToLower(fmt.Sprintf("%v", vals[0])) {
+		case "snippet":
+			a.Type = post.Snippet
+		case "page":
+			a.Type = post.Page
+		case "post":
+			a.Type = post.Post
+		}
 	case "summary":
 		a.Description = fmt.Sprintf("%v", vals[0])
 	}
