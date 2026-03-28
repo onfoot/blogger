@@ -17,9 +17,9 @@ import (
 
 	"net/http"
 
-	"github.com/onfoot/blogger/auth"
-	"github.com/onfoot/blogger/micropub"
-	"github.com/onfoot/blogger/post"
+	"macbirdie.net/blogger/auth"
+	"macbirdie.net/blogger/micropub"
+	"macbirdie.net/blogger/post"
 
 	blackfriday "github.com/russross/blackfriday/v2"
 

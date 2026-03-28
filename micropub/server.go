@@ -16,8 +16,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/onfoot/blogger/auth"
-	"github.com/onfoot/blogger/post"
+	"macbirdie.net/blogger/auth"
+	"macbirdie.net/blogger/post"
 )
 
 // Server is a Micropub server that writes posts to disk as Markdown files.
