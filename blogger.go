@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"bytes"
 	"flag"
-	"io/ioutil"
 	"log"
 	"os"
 	"os/user"
@@ -15,11 +14,11 @@ import (
 	"text/template"
 	"time"
 
-	"macbirdie.net/blogger/post"
+	"github.com/macbirdie/blogger/post"
 
-	"github.com/russross/blackfriday"
+	blackfriday "github.com/russross/blackfriday/v2"
 
-	"gopkg.in/fsnotify.v1"
+	"github.com/fsnotify/fsnotify"
 )
 
 var blogTitle = flag.String("title", "blog", "Blog title")
@@ -48,16 +47,25 @@ func containsString(haystack []string, needle string) bool {
 	return false
 }
 
+func expandHomePath(p string) string {
+	if !strings.HasPrefix(p, "~/") {
+		return p
+	}
+	u, err := user.Current()
+	if err != nil {
+		log.Fatalf("Could not determine home directory: %v", err)
+	}
+	return filepath.Join(u.HomeDir, p[2:])
+}
+
 func generate() {
 
 	log.Printf("Generating blog: %s", *blogTitle)
 
-	destinationDir, destinationDirErr := os.Open(*destinationPath)
-
-	if destinationDirErr != nil {
-		log.Fatal("Destination directory could not be opened: ", destinationDirErr)
+	destinationDir, err := os.Open(*destinationPath)
+	if err != nil {
+		log.Fatal("Destination directory could not be opened: ", err)
 	}
-
 	defer destinationDir.Close()
 
 	funcMap := template.FuncMap{
@@ -70,9 +78,7 @@ func generate() {
 		"Page":         func(args ...interface{}) bool { return args[0].(*post.Article).Type == post.Page },
 		"last":         func(index, count int) bool { return index == count-1 },
 		"tagIndexName": func(tag string) string { return "tag-" + tag + *destinationExt },
-		"path": func(article post.Article) string {
-			return article.FullPath()
-		},
+		"path":         func(article post.Article) string { return article.FullPath() },
 	}
 
 	mainTemplate := template.Must(template.New("template.html").Funcs(funcMap).ParseFiles(path.Join(*templatesPath, templateFileName)))
@@ -86,20 +92,14 @@ func generate() {
 		Path      string
 	}
 
-	sourceFiles := []PostFile{}
-
-	user, _ := user.Current()
-	homedir := user.HomeDir
+	var sourceFiles []PostFile
 
 	for _, postDir := range strings.Split(*postsPath, ",") {
+		postDir = expandHomePath(strings.TrimSpace(postDir))
 
-		if postDir[:2] == "~/" {
-			postDir = strings.Replace(postDir, "~", homedir, 1)
-		}
-
-		walkFunc := func(filepath string, info os.FileInfo, err error) error {
+		walkFunc := func(filePath string, info os.FileInfo, err error) error {
 			if err != nil {
-				log.Fatalf("Post directory %q not found", filepath)
+				log.Fatalf("Post directory %q not found", filePath)
 			}
 
 			if info.IsDir() {
@@ -122,60 +122,55 @@ func generate() {
 				}
 			}
 
-			sourceFiles = append(sourceFiles, PostFile{Name: filename, Extension: ext, Path: filepath})
-
+			sourceFiles = append(sourceFiles, PostFile{Name: filename, Extension: ext, Path: filePath})
 			return nil
 		}
 
-		filepath.Walk(postDir, walkFunc)
+		if err := filepath.Walk(postDir, walkFunc); err != nil {
+			log.Printf("Error walking directory %q: %v", postDir, err)
+		}
 	}
 
 	var articles, indexArticles, feedArticles, snippetArticles post.Articles
 
-	htmlFlags := 0
-	htmlFlags |= blackfriday.HTML_USE_SMARTYPANTS
-	htmlFlags |= blackfriday.HTML_SMARTYPANTS_FRACTIONS
-	htmlFlags |= blackfriday.HTML_SMARTYPANTS_LATEX_DASHES
-
-	var rendererParameters blackfriday.HtmlRendererParameters
-
-	htmlPrefix := *siteRoot
-	htmlPrefix = strings.TrimSuffix(htmlPrefix, "/")
-	rendererParameters.AbsolutePrefix = htmlPrefix
-
+	htmlPrefix := strings.TrimSuffix(*siteRoot, "/")
 	log.Println("Using prefix", htmlPrefix)
-	renderer := blackfriday.HtmlRendererWithParameters(htmlFlags, "", "", rendererParameters)
-	extensions := 0
-	extensions |= blackfriday.EXTENSION_NO_INTRA_EMPHASIS
-	extensions |= blackfriday.EXTENSION_TABLES
-	extensions |= blackfriday.EXTENSION_FENCED_CODE
-	extensions |= blackfriday.EXTENSION_AUTOLINK
-	extensions |= blackfriday.EXTENSION_STRIKETHROUGH
-	extensions |= blackfriday.EXTENSION_SPACE_HEADERS
-	extensions |= blackfriday.EXTENSION_HEADER_IDS
-	extensions |= blackfriday.EXTENSION_FOOTNOTES
+
+	renderer := blackfriday.NewHTMLRenderer(blackfriday.HTMLRendererParameters{
+		Flags:          blackfriday.Smartypants | blackfriday.SmartypantsFractions | blackfriday.SmartypantsLatexDashes,
+		AbsolutePrefix: htmlPrefix,
+	})
+
+	extensions := blackfriday.NoIntraEmphasis |
+		blackfriday.Tables |
+		blackfriday.FencedCode |
+		blackfriday.Autolink |
+		blackfriday.Strikethrough |
+		blackfriday.SpaceHeadings |
+		blackfriday.HeadingIDs |
+		blackfriday.Footnotes
 
 	for _, sourceFile := range sourceFiles {
 
 		file, fileError := os.Open(sourceFile.Path)
-
 		if fileError != nil {
 			log.Printf("Skipping %v due to error: %v", sourceFile.Path, fileError)
 			continue
 		}
 
-		defer file.Close()
-
 		article, readErr := post.ReadArticle(bufio.NewReader(file))
+		file.Close()
 
 		if readErr != nil {
 			log.Printf("Skipping file %v due to parse error: %v", sourceFile.Path, readErr)
 			continue
 		}
 
-		md := blackfriday.Markdown(article.RawContent, renderer, extensions)
-
-		article.Content = string(md)
+		article.Content = string(blackfriday.Run(
+			article.RawContent,
+			blackfriday.WithRenderer(renderer),
+			blackfriday.WithExtensions(extensions),
+		))
 
 		article.Filename = sourceFile.Name + *destinationExt
 
@@ -187,11 +182,7 @@ func generate() {
 
 		articles = append(articles, &article)
 
-		if article.Type == post.Page {
-			continue
-		}
-
-		if article.Draft {
+		if article.Type == post.Page || article.Draft {
 			continue
 		}
 
@@ -213,47 +204,55 @@ func generate() {
 	sort.Sort(feedArticles)
 	sort.Sort(snippetArticles)
 
-	indexBuffer := bytes.NewBufferString("")
-	rssIndexBuffer := bytes.NewBufferString("")
-	snippetrssIndexBuffer := bytes.NewBufferString("")
+	indexBuffer := new(bytes.Buffer)
+	rssIndexBuffer := new(bytes.Buffer)
+	snippetrssIndexBuffer := new(bytes.Buffer)
 
-	mainTemplate.Execute(indexBuffer, map[string]interface{}{
+	if err := mainTemplate.Execute(indexBuffer, map[string]interface{}{
 		"Title":       blogTitle,
 		"Home":        true,
 		"Root":        *siteRoot,
 		"Articles":    indexArticles,
 		"CreatedTime": now,
-	})
+	}); err != nil {
+		log.Printf("Error rendering index: %v", err)
+	}
 
-	mainRssTemplate.Execute(rssIndexBuffer, map[string]interface{}{
+	if err := mainRssTemplate.Execute(rssIndexBuffer, map[string]interface{}{
 		"Title":       blogTitle,
 		"Home":        true,
 		"Root":        *siteRoot,
 		"File":        "index.xml",
 		"Articles":    feedArticles,
 		"CreatedTime": &now,
-	})
+	}); err != nil {
+		log.Printf("Error rendering RSS index: %v", err)
+	}
 
-	mainRssTemplate.Execute(snippetrssIndexBuffer, map[string]interface{}{
+	if err := mainRssTemplate.Execute(snippetrssIndexBuffer, map[string]interface{}{
 		"Title":       blogTitle,
 		"Home":        true,
 		"Root":        *siteRoot,
 		"File":        "snippets.xml",
 		"Articles":    snippetArticles,
 		"CreatedTime": &now,
-	})
+	}); err != nil {
+		log.Printf("Error rendering snippet RSS: %v", err)
+	}
 
 	for _, article := range articles {
 
-		destFileBuffer := bytes.NewBufferString("")
+		destFileBuffer := new(bytes.Buffer)
 
-		mainTemplate.Execute(destFileBuffer, map[string]interface{}{
+		if err := mainTemplate.Execute(destFileBuffer, map[string]interface{}{
 			"BlogTitle": blogTitle,
 			"Article":   article,
-			"Title":     string(article.Title + " – " + *blogTitle),
+			"Title":     article.Title + " – " + *blogTitle,
 			"Home":      false,
 			"Root":      *siteRoot,
-		})
+		}); err != nil {
+			log.Printf("Error rendering article %v: %v", article.Filename, err)
+		}
 
 		for _, tag := range article.Tags {
 			tags[tag] = true
@@ -261,77 +260,83 @@ func generate() {
 
 		destinationFileName := path.Join(destinationDir.Name(), article.FullPath())
 
-		os.MkdirAll(path.Join(destinationDir.Name(), article.BasePath()), os.ModePerm)
+		if err := os.MkdirAll(path.Join(destinationDir.Name(), article.BasePath()), 0755); err != nil {
+			log.Printf("Could not create directory for %v: %v", destinationFileName, err)
+			continue
+		}
 
-		writeErr := ioutil.WriteFile(destinationFileName, destFileBuffer.Bytes(), os.ModePerm)
-
-		if writeErr != nil {
-			log.Printf("Could not write file %v due to error: %v", destinationFileName, writeErr)
+		if err := os.WriteFile(destinationFileName, destFileBuffer.Bytes(), 0644); err != nil {
+			log.Printf("Could not write file %v: %v", destinationFileName, err)
 		}
 	}
 
-	indexFileName := path.Join(destinationDir.Name(), "index.html")
-	rssIndexFileName := path.Join(destinationDir.Name(), "index.xml")
-	snippetIndexFileName := path.Join(destinationDir.Name(), "snippets.xml")
-
-	ioutil.WriteFile(indexFileName, indexBuffer.Bytes(), os.ModePerm)
-	ioutil.WriteFile(rssIndexFileName, rssIndexBuffer.Bytes(), os.ModePerm)
-	ioutil.WriteFile(snippetIndexFileName, snippetrssIndexBuffer.Bytes(), os.ModePerm)
+	for name, buf := range map[string]*bytes.Buffer{
+		path.Join(destinationDir.Name(), "index.html"):   indexBuffer,
+		path.Join(destinationDir.Name(), "index.xml"):    rssIndexBuffer,
+		path.Join(destinationDir.Name(), "snippets.xml"): snippetrssIndexBuffer,
+	} {
+		if err := os.WriteFile(name, buf.Bytes(), 0644); err != nil {
+			log.Printf("Could not write %v: %v", name, err)
+		}
+	}
 
 	tagFeedsEnabled := map[string]bool{}
-
 	for _, tagEnabled := range strings.Split(*tagfeeds, ",") {
 		tagFeedsEnabled[tagEnabled] = true
 	}
 
-
 	for tag := range tags {
 
-		tagIndexBuffer := bytes.NewBufferString("")
+		tagIndexBuffer := new(bytes.Buffer)
 		var tagArticles post.Articles
 
 		for _, article := range indexArticles {
-
-			if !article.HasTag(tag.Name) {
-				continue
+			if article.HasTag(tag.Name) {
+				tagArticles = append(tagArticles, article)
 			}
-
-			tagArticles = append(tagArticles, article)
 		}
 
-		mainTemplate.Execute(tagIndexBuffer, map[string]interface{}{
+		if err := mainTemplate.Execute(tagIndexBuffer, map[string]interface{}{
 			"Articles": tagArticles,
 			"Title":    "Tag: " + tag.Name + " – " + *blogTitle,
 			"Home":     false,
 			"Root":     *siteRoot,
-		})
-
+		}); err != nil {
+			log.Printf("Error rendering tag %v index: %v", tag.Name, err)
+		}
 
 		if tagFeedsEnabled[tag.OriginalName] {
-			tagFeedBuffer := bytes.NewBufferString("")
+			tagFeedBuffer := new(bytes.Buffer)
+			feedFileName := "index-tag-" + tag.FileName() + ".xml"
 
-			mainRssTemplate.Execute(tagFeedBuffer, map[string]interface{}{
+			if err := mainRssTemplate.Execute(tagFeedBuffer, map[string]interface{}{
 				"Title":       blogTitle,
 				"Home":        true,
 				"Root":        *siteRoot,
-				"File":        "index-tag-" + tag.FileName() + ".xml",
+				"File":        feedFileName,
 				"Articles":    tagArticles,
 				"CreatedTime": &now,
-			})
+			}); err != nil {
+				log.Printf("Error rendering tag %v feed: %v", tag.Name, err)
+			}
 
-			tagFeedFileName := path.Join(destinationDir.Name(), "index-tag-"+tag.FileName()+".xml")
-			ioutil.WriteFile(tagFeedFileName, tagFeedBuffer.Bytes(), os.ModePerm)
+			tagFeedFileName := path.Join(destinationDir.Name(), feedFileName)
+			if err := os.WriteFile(tagFeedFileName, tagFeedBuffer.Bytes(), 0644); err != nil {
+				log.Printf("Could not write %v: %v", tagFeedFileName, err)
+			}
 		}
 
 		tagIndexFileName := path.Join(destinationDir.Name(), "tag-"+tag.FileName()+*destinationExt)
-		ioutil.WriteFile(tagIndexFileName, tagIndexBuffer.Bytes(), os.ModePerm)
+		if err := os.WriteFile(tagIndexFileName, tagIndexBuffer.Bytes(), 0644); err != nil {
+			log.Printf("Could not write %v: %v", tagIndexFileName, err)
+		}
 	}
 }
 
 func watch() {
 	watcher, err := fsnotify.NewWatcher()
 	if err != nil {
-		log.Fatal("Couldn't watch the post directories")
+		log.Fatal("Couldn't watch the post directories: ", err)
 	}
 	defer watcher.Close()
 
@@ -340,8 +345,8 @@ func watch() {
 		for {
 			select {
 			case event := <-watcher.Events:
-				if (event.Op&fsnotify.Write == fsnotify.Write) || (event.Op&fsnotify.Create == fsnotify.Create) {
-					log.Println("Modified file: ", event.Name)
+				if event.Has(fsnotify.Write) || event.Has(fsnotify.Create) {
+					log.Println("Modified file:", event.Name)
 					generate()
 				}
 			case err := <-watcher.Errors:
@@ -352,26 +357,14 @@ func watch() {
 
 	var watchedDirs []string
 
-	user, _ := user.Current()
-	homedir := user.HomeDir
-
 	for _, postDir := range strings.Split(*postsPath, ",") {
+		postDir = expandHomePath(strings.TrimSpace(postDir))
 
-		if postDir[:2] == "~/" {
-			postDir = strings.Replace(postDir, "~", homedir, 1)
-		}
-
-		walkFunc := func(filepath string, info os.FileInfo, err error) error {
-			if err != nil {
+		walkFunc := func(filePath string, info os.FileInfo, err error) error {
+			if err != nil || !info.IsDir() {
 				return nil
 			}
-
-			if !info.IsDir() {
-				return nil
-			}
-
-			watchedDirs = append(watchedDirs, filepath)
-
+			watchedDirs = append(watchedDirs, filePath)
 			return nil
 		}
 
@@ -407,14 +400,11 @@ func main() {
 		case "page":
 			article.Title = "Hello world"
 			article.Type = post.Page
-			break
 		case "post":
 			article.Title = "Blog post"
 			article.Type = post.Post
-			break
 		case "snippet":
 			article.Type = post.Snippet
-			break
 		default:
 			log.Fatal("post, snippet and page are the only allowed parameters for -print")
 		}
