@@ -355,6 +355,8 @@ func (s *Server) create(w http.ResponseWriter, req *mpRequest) {
 		articleType = post.Post
 	default:
 		switch req.HType {
+		case "snippet":
+			articleType = post.Snippet
 		case "page":
 			articleType = post.Page
 		case "entry":
