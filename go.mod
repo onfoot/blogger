@@ -1,4 +1,4 @@
-module github.com/macbirdie/blogger
+module github.com/onfoot/blogger
 
 go 1.21
 
