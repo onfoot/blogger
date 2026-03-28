@@ -7,6 +7,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"html/template"
 	"log"
 	"net/http"
 	"net/url"
@@ -30,49 +31,206 @@ type Server struct {
 	OnChange func() // called (in a goroutine) after any write
 }
 
-// Handler returns an http.Handler serving the Micropub and token endpoints.
+// Handler returns an http.Handler serving the Micropub, token, and auth endpoints.
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/micropub", s.handleMicropub)
 	mux.HandleFunc("/micropub/token", s.handleToken)
+	mux.HandleFunc("/micropub/auth", s.handleAuth)
 	return mux
 }
 
-// ── Token endpoint ────────────────────────────────────────────────────────────
+// ── Authorization endpoint ────────────────────────────────────────────────────
 
-// handleToken issues Bearer tokens via a simple password grant.
+var authFormTmpl = template.Must(template.New("auth").Parse(`<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Authorize — {{.ClientID}}</title>
+<style>
+body{font-family:system-ui,sans-serif;max-width:420px;margin:4rem auto;padding:0 1rem}
+h1{font-size:1.25rem}
+label{display:block;margin:.6rem 0 .1rem}
+input[type=text],input[type=password]{width:100%;padding:.4rem;box-sizing:border-box}
+.row{display:flex;gap:.5rem;margin-top:1rem}
+.approve{background:#2563eb;color:#fff;padding:.5rem 1rem;border:none;cursor:pointer;border-radius:3px}
+.deny{padding:.5rem 1rem;border:1px solid #ccc;cursor:pointer;border-radius:3px}
+.meta{font-size:.85rem;color:#555;margin:.25rem 0}
+</style>
+</head>
+<body>
+<h1>Authorize access</h1>
+<p class="meta"><strong>{{.ClientID}}</strong> is requesting access to post to your blog.</p>
+<p class="meta">Scope: <code>{{.Scope}}</code></p>
+{{if .Error}}<p style="color:red">{{.Error}}</p>{{end}}
+<form method="POST">
+  <input type="hidden" name="client_id"    value="{{.ClientID}}">
+  <input type="hidden" name="redirect_uri" value="{{.RedirectURI}}">
+  <input type="hidden" name="state"        value="{{.State}}">
+  <input type="hidden" name="scope"        value="{{.Scope}}">
+  <label>Username<input type="text"     name="username" autofocus required></label>
+  <label>Password<input type="password" name="password"          required></label>
+  <div class="row">
+    <button class="approve" type="submit" name="approve" value="1">Approve</button>
+    <button class="deny"    type="submit" name="approve" value="0">Deny</button>
+  </div>
+</form>
+</body>
+</html>`))
+
+// handleAuth serves the IndieAuth authorization endpoint.
 //
-// POST /micropub/token
-//
-//	grant_type=password&username=alice&password=secret
-func (s *Server) handleToken(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
+//   - GET  /micropub/auth — show the consent form
+//   - POST /micropub/auth — validate credentials and redirect with an auth code
+func (s *Server) handleAuth(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		s.showAuthForm(w, r, "")
+	case http.MethodPost:
+		s.processAuth(w, r)
+	default:
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
 	}
+}
+
+type authFormData struct {
+	ClientID    string
+	RedirectURI string
+	State       string
+	Scope       string
+	Error       string
+}
+
+func authParams(r *http.Request) authFormData {
+	q := r.URL.Query()
+	scope := q.Get("scope")
+	if scope == "" {
+		scope = "create update delete"
+	}
+	return authFormData{
+		ClientID:    q.Get("client_id"),
+		RedirectURI: q.Get("redirect_uri"),
+		State:       q.Get("state"),
+		Scope:       scope,
+	}
+}
+
+func (s *Server) showAuthForm(w http.ResponseWriter, r *http.Request, errMsg string) {
+	data := authParams(r)
+	data.Error = errMsg
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	authFormTmpl.Execute(w, data) //nolint:errcheck
+}
+
+func (s *Server) processAuth(w http.ResponseWriter, r *http.Request) {
 	if err := r.ParseForm(); err != nil {
 		http.Error(w, "bad request", http.StatusBadRequest)
 		return
 	}
 
-	if r.FormValue("grant_type") != "password" {
+	clientID := r.FormValue("client_id")
+	redirectURI := r.FormValue("redirect_uri")
+	state := r.FormValue("state")
+	scope := r.FormValue("scope")
+	if scope == "" {
+		scope = "create update delete"
+	}
+
+	// User clicked Deny.
+	if r.FormValue("approve") != "1" {
+		dest := redirectURI + "?error=access_denied"
+		if state != "" {
+			dest += "&state=" + url.QueryEscape(state)
+		}
+		http.Redirect(w, r, dest, http.StatusFound)
+		return
+	}
+
+	// Validate credentials.
+	username := r.FormValue("username")
+	ok, err := auth.ValidateCredentials(s.DB, username, r.FormValue("password"))
+	if err != nil {
+		log.Printf("micropub: auth credentials: %v", err)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	if !ok {
+		// Re-render form preserving GET params so the hidden fields are populated.
+		r.URL.RawQuery = url.Values{
+			"client_id":    {clientID},
+			"redirect_uri": {redirectURI},
+			"state":        {state},
+			"scope":        {scope},
+		}.Encode()
+		s.showAuthForm(w, r, "Invalid username or password.")
+		return
+	}
+
+	code, err := auth.CreateAuthCode(s.DB, username, clientID, redirectURI, scope)
+	if err != nil {
+		log.Printf("micropub: create auth code: %v", err)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+
+	dest := redirectURI + "?code=" + url.QueryEscape(code)
+	if state != "" {
+		dest += "&state=" + url.QueryEscape(state)
+	}
+	http.Redirect(w, r, dest, http.StatusFound)
+}
+
+// ── Token endpoint ────────────────────────────────────────────────────────────
+
+// handleToken serves the IndieAuth token endpoint.
+//
+//   - POST /micropub/token  grant_type=authorization_code — exchange auth code for Bearer token
+//   - POST /micropub/token  action=revoke                 — revoke a token
+//   - GET  /micropub/token  Authorization: Bearer …       — verify a token
+func (s *Server) handleToken(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		s.verifyToken(w, r)
+	case http.MethodPost:
+		if err := r.ParseForm(); err != nil {
+			http.Error(w, "bad request", http.StatusBadRequest)
+			return
+		}
+		if r.FormValue("action") == "revoke" {
+			s.revokeToken(w, r)
+		} else {
+			s.exchangeToken(w, r)
+		}
+	default:
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+// exchangeToken exchanges an authorization code for a Bearer token.
+func (s *Server) exchangeToken(w http.ResponseWriter, r *http.Request) {
+	if r.FormValue("grant_type") != "authorization_code" {
 		writeJSON(w, http.StatusBadRequest, map[string]string{
 			"error":             "unsupported_grant_type",
-			"error_description": "only password grant type is supported",
+			"error_description": "only authorization_code grant type is supported",
 		})
 		return
 	}
 
-	ok, err := auth.ValidateCredentials(s.DB, r.FormValue("username"), r.FormValue("password"))
-	if err != nil || !ok {
+	username, scope, err := auth.ExchangeAuthCode(
+		s.DB,
+		r.FormValue("code"),
+		r.FormValue("client_id"),
+		r.FormValue("redirect_uri"),
+	)
+	if err != nil {
 		writeJSON(w, http.StatusUnauthorized, map[string]string{
-			"error":             "invalid_client",
-			"error_description": "invalid credentials",
+			"error":             "invalid_grant",
+			"error_description": err.Error(),
 		})
 		return
 	}
 
-	token, err := auth.CreateToken(s.DB, r.FormValue("username"))
+	token, err := auth.CreateToken(s.DB, username, r.FormValue("client_id"), scope)
 	if err != nil {
 		log.Printf("micropub: create token: %v", err)
 		http.Error(w, "internal error", http.StatusInternalServerError)
@@ -82,8 +240,45 @@ func (s *Server) handleToken(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{
 		"access_token": token,
 		"token_type":   "Bearer",
-		"scope":        "create update delete",
-		"me":           s.SiteRoot,
+		"scope":        scope,
+		"me":           strings.TrimRight(s.SiteRoot, "/") + "/",
+	})
+}
+
+// revokeToken immediately invalidates a Bearer token.
+func (s *Server) revokeToken(w http.ResponseWriter, r *http.Request) {
+	token := r.FormValue("token")
+	if token == "" {
+		token = strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
+	}
+	if err := auth.RevokeToken(s.DB, token); err != nil {
+		log.Printf("micropub: revoke token: %v", err)
+	}
+	// Always return 200 per OAuth2 revocation spec (RFC 7009).
+	w.WriteHeader(http.StatusOK)
+}
+
+// verifyToken responds to a token introspection request (GET with Bearer token).
+func (s *Server) verifyToken(w http.ResponseWriter, r *http.Request) {
+	token := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
+	if token == "" {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+		return
+	}
+	info, err := auth.ValidateToken(s.DB, token)
+	if err != nil {
+		log.Printf("micropub: verify token: %v", err)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	if info == nil {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "invalid_token"})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{
+		"me":        strings.TrimRight(s.SiteRoot, "/") + "/",
+		"client_id": info.ClientID,
+		"scope":     info.Scope,
 	})
 }
 
@@ -116,8 +311,8 @@ func (s *Server) authenticated(r *http.Request) bool {
 	if token == "" {
 		return false
 	}
-	username, err := auth.ValidateToken(s.DB, token)
-	return err == nil && username != ""
+	info, err := auth.ValidateToken(s.DB, token)
+	return err == nil && info != nil
 }
 
 func (s *Server) handleQuery(w http.ResponseWriter, r *http.Request) {

@@ -233,18 +233,22 @@ func generate() {
 
 	micropubEndpoint := *micropubURL
 	tokenEndpoint := ""
+	authEndpoint := ""
 	if micropubEndpoint != "" {
-		tokenEndpoint = strings.TrimRight(micropubEndpoint, "/") + "/token"
+		base := strings.TrimRight(micropubEndpoint, "/")
+		tokenEndpoint = base + "/token"
+		authEndpoint = base + "/auth"
 	}
 
 	if err := mainTemplate.Execute(indexBuffer, map[string]interface{}{
-		"Title":             blogTitle,
-		"Home":              true,
-		"Root":              *siteRoot,
-		"Articles":          indexArticles,
-		"CreatedTime":       now,
-		"MicropubURL":       micropubEndpoint,
-		"TokenEndpointURL":  tokenEndpoint,
+		"Title":            blogTitle,
+		"Home":             true,
+		"Root":             *siteRoot,
+		"Articles":         indexArticles,
+		"CreatedTime":      now,
+		"MicropubURL":      micropubEndpoint,
+		"TokenEndpointURL": tokenEndpoint,
+		"AuthEndpointURL":  authEndpoint,
 	}); err != nil {
 		log.Printf("Error rendering index: %v", err)
 	}
@@ -283,6 +287,7 @@ func generate() {
 			"Root":             *siteRoot,
 			"MicropubURL":      micropubEndpoint,
 			"TokenEndpointURL": tokenEndpoint,
+			"AuthEndpointURL":  authEndpoint,
 		}); err != nil {
 			log.Printf("Error rendering article %v: %v", article.Filename, err)
 		}
@@ -336,6 +341,7 @@ func generate() {
 			"Root":             *siteRoot,
 			"MicropubURL":      micropubEndpoint,
 			"TokenEndpointURL": tokenEndpoint,
+			"AuthEndpointURL":  authEndpoint,
 		}); err != nil {
 			log.Printf("Error rendering tag %v index: %v", tag.Name, err)
 		}

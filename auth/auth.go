@@ -11,6 +11,13 @@ import (
 	"golang.org/x/crypto/bcrypt"
 )
 
+// TokenInfo holds the details of a verified Bearer token.
+type TokenInfo struct {
+	Username string
+	ClientID string
+	Scope    string
+}
+
 // OpenDB opens (or creates) the SQLite database at dbPath and ensures the schema exists.
 func OpenDB(dbPath string) (*sql.DB, error) {
 	db, err := sql.Open("sqlite3", dbPath)
@@ -47,14 +54,38 @@ func initDB(db *sql.DB) error {
 		CREATE TABLE IF NOT EXISTS tokens (
 			token      TEXT PRIMARY KEY,
 			username   TEXT NOT NULL,
+			client_id  TEXT NOT NULL DEFAULT '',
+			scope      TEXT NOT NULL DEFAULT 'create update delete',
 			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
 			FOREIGN KEY (username) REFERENCES users(username) ON DELETE CASCADE
 		)
 	`); err != nil {
 		return fmt.Errorf("creating tokens table: %w", err)
 	}
+	if _, err := db.Exec(`
+		CREATE TABLE IF NOT EXISTS auth_codes (
+			code         TEXT PRIMARY KEY,
+			username     TEXT NOT NULL,
+			client_id    TEXT NOT NULL,
+			redirect_uri TEXT NOT NULL,
+			scope        TEXT NOT NULL,
+			created_at   DATETIME DEFAULT CURRENT_TIMESTAMP,
+			FOREIGN KEY (username) REFERENCES users(username) ON DELETE CASCADE
+		)
+	`); err != nil {
+		return fmt.Errorf("creating auth_codes table: %w", err)
+	}
+
+	// Best-effort migrations: add columns introduced in this version to
+	// pre-existing databases. SQLite returns an error if the column already
+	// exists; we ignore it.
+	db.Exec(`ALTER TABLE tokens ADD COLUMN client_id TEXT NOT NULL DEFAULT ''`)  //nolint:errcheck
+	db.Exec(`ALTER TABLE tokens ADD COLUMN scope TEXT NOT NULL DEFAULT 'create update delete'`) //nolint:errcheck
+
 	return nil
 }
+
+// ── User management ───────────────────────────────────────────────────────────
 
 // AddUser creates a new user with a bcrypt-hashed password.
 func AddUser(db *sql.DB, username, password string) error {
@@ -122,33 +153,89 @@ func ValidateCredentials(db *sql.DB, username, password string) (bool, error) {
 	return err == nil, err
 }
 
-// CreateToken generates a random Bearer token for the given user and persists it.
-func CreateToken(db *sql.DB, username string) (string, error) {
+// ── Authorization code flow ───────────────────────────────────────────────────
+
+// CreateAuthCode issues a short-lived authorization code (10-minute TTL).
+func CreateAuthCode(db *sql.DB, username, clientID, redirectURI, scope string) (string, error) {
+	b := make([]byte, 16)
+	if _, err := rand.Read(b); err != nil {
+		return "", fmt.Errorf("generating auth code: %w", err)
+	}
+	code := hex.EncodeToString(b)
+	_, err := db.Exec(
+		`INSERT INTO auth_codes (code, username, client_id, redirect_uri, scope) VALUES (?, ?, ?, ?, ?)`,
+		code, username, clientID, redirectURI, scope,
+	)
+	if err != nil {
+		return "", fmt.Errorf("storing auth code: %w", err)
+	}
+	return code, nil
+}
+
+// ExchangeAuthCode validates and consumes an authorization code, returning the
+// username and scope. The code must match client_id and redirect_uri and must
+// not be older than 10 minutes. Codes are single-use.
+func ExchangeAuthCode(db *sql.DB, code, clientID, redirectURI string) (username, scope string, err error) {
+	err = db.QueryRow(`
+		SELECT username, scope FROM auth_codes
+		WHERE code = ?
+		  AND client_id = ?
+		  AND redirect_uri = ?
+		  AND created_at > datetime('now', '-10 minutes')
+	`, code, clientID, redirectURI).Scan(&username, &scope)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", "", errors.New("invalid or expired authorization code")
+	}
+	if err != nil {
+		return "", "", err
+	}
+	// Codes are single-use; delete immediately after a successful exchange.
+	db.Exec(`DELETE FROM auth_codes WHERE code = ?`, code) //nolint:errcheck
+	return username, scope, nil
+}
+
+// ── Bearer token management ───────────────────────────────────────────────────
+
+// tokenTTL is how long a Bearer token remains valid after creation.
+const tokenTTL = "-90 days"
+
+// CreateToken generates a random Bearer token for the given user, recording the
+// originating client and granted scope.
+func CreateToken(db *sql.DB, username, clientID, scope string) (string, error) {
 	b := make([]byte, 32)
 	if _, err := rand.Read(b); err != nil {
 		return "", fmt.Errorf("generating token: %w", err)
 	}
 	token := hex.EncodeToString(b)
-	_, err := db.Exec(`INSERT INTO tokens (token, username) VALUES (?, ?)`, token, username)
+	_, err := db.Exec(
+		`INSERT INTO tokens (token, username, client_id, scope) VALUES (?, ?, ?, ?)`,
+		token, username, clientID, scope,
+	)
 	if err != nil {
 		return "", fmt.Errorf("storing token: %w", err)
 	}
 	return token, nil
 }
 
-// tokenTTL is how long a Bearer token remains valid after creation.
-const tokenTTL = "-90 days"
-
-// ValidateToken returns the username associated with the Bearer token, or "" if
-// the token is invalid or older than 90 days.
-func ValidateToken(db *sql.DB, token string) (string, error) {
-	var username string
-	err := db.QueryRow(
-		`SELECT username FROM tokens WHERE token = ? AND created_at > datetime('now', ?)`,
-		token, tokenTTL,
-	).Scan(&username)
+// ValidateToken returns the TokenInfo for a valid, non-expired token.
+// Returns nil (with no error) if the token is unknown or expired.
+func ValidateToken(db *sql.DB, token string) (*TokenInfo, error) {
+	var info TokenInfo
+	err := db.QueryRow(`
+		SELECT username, client_id, scope FROM tokens
+		WHERE token = ? AND created_at > datetime('now', ?)
+	`, token, tokenTTL).Scan(&info.Username, &info.ClientID, &info.Scope)
 	if errors.Is(err, sql.ErrNoRows) {
-		return "", nil
+		return nil, nil
 	}
-	return username, err
+	if err != nil {
+		return nil, err
+	}
+	return &info, nil
+}
+
+// RevokeToken deletes a token from the store, immediately invalidating it.
+func RevokeToken(db *sql.DB, token string) error {
+	_, err := db.Exec(`DELETE FROM tokens WHERE token = ?`, token)
+	return err
 }
