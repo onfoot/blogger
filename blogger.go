@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"flag"
+	"fmt"
 	"log"
 	"os"
 	"os/user"
@@ -14,11 +15,13 @@ import (
 	"text/template"
 	"time"
 
+	"github.com/macbirdie/blogger/auth"
 	"github.com/macbirdie/blogger/post"
 
 	blackfriday "github.com/russross/blackfriday/v2"
 
 	"github.com/fsnotify/fsnotify"
+	"golang.org/x/term"
 )
 
 var blogTitle = flag.String("title", "blog", "Blog title")
@@ -31,6 +34,11 @@ var templatePrint = flag.String("print", "", "Print out a template for a snippet
 var templateAuthor = flag.String("author", "", "Set a default post author")
 var listen = flag.Bool("listen", false, "Listen to changes in post directories and regenerate")
 var tagfeeds = flag.String("tagfeeds", "", "Generate RSS feeds for specified tags (comma-separated)")
+var micropubURL = flag.String("micropub-url", "", "Micropub endpoint base URL (e.g. https://example.com/micropub); adds <link> tags to templates")
+var dbPath = flag.String("db", "blogger.db", "SQLite database path for auth/user management")
+var addUser = flag.String("adduser", "", "Add a new user to the auth database (prompts for password)")
+var updateUser = flag.String("updateuser", "", "Update an existing user's password (prompts for password)")
+var listUsers = flag.Bool("listusers", false, "List all users in the auth database")
 
 const templateFileName = "template.html"
 const rssTemplateFileName = "rsstemplate.html"
@@ -208,12 +216,20 @@ func generate() {
 	rssIndexBuffer := new(bytes.Buffer)
 	snippetrssIndexBuffer := new(bytes.Buffer)
 
+	micropubEndpoint := *micropubURL
+	tokenEndpoint := ""
+	if micropubEndpoint != "" {
+		tokenEndpoint = strings.TrimRight(micropubEndpoint, "/") + "/token"
+	}
+
 	if err := mainTemplate.Execute(indexBuffer, map[string]interface{}{
-		"Title":       blogTitle,
-		"Home":        true,
-		"Root":        *siteRoot,
-		"Articles":    indexArticles,
-		"CreatedTime": now,
+		"Title":             blogTitle,
+		"Home":              true,
+		"Root":              *siteRoot,
+		"Articles":          indexArticles,
+		"CreatedTime":       now,
+		"MicropubURL":       micropubEndpoint,
+		"TokenEndpointURL":  tokenEndpoint,
 	}); err != nil {
 		log.Printf("Error rendering index: %v", err)
 	}
@@ -245,11 +261,13 @@ func generate() {
 		destFileBuffer := new(bytes.Buffer)
 
 		if err := mainTemplate.Execute(destFileBuffer, map[string]interface{}{
-			"BlogTitle": blogTitle,
-			"Article":   article,
-			"Title":     article.Title + " – " + *blogTitle,
-			"Home":      false,
-			"Root":      *siteRoot,
+			"BlogTitle":        blogTitle,
+			"Article":          article,
+			"Title":            article.Title + " – " + *blogTitle,
+			"Home":             false,
+			"Root":             *siteRoot,
+			"MicropubURL":      micropubEndpoint,
+			"TokenEndpointURL": tokenEndpoint,
 		}); err != nil {
 			log.Printf("Error rendering article %v: %v", article.Filename, err)
 		}
@@ -297,10 +315,12 @@ func generate() {
 		}
 
 		if err := mainTemplate.Execute(tagIndexBuffer, map[string]interface{}{
-			"Articles": tagArticles,
-			"Title":    "Tag: " + tag.Name + " – " + *blogTitle,
-			"Home":     false,
-			"Root":     *siteRoot,
+			"Articles":         tagArticles,
+			"Title":            "Tag: " + tag.Name + " – " + *blogTitle,
+			"Home":             false,
+			"Root":             *siteRoot,
+			"MicropubURL":      micropubEndpoint,
+			"TokenEndpointURL": tokenEndpoint,
 		}); err != nil {
 			log.Printf("Error rendering tag %v index: %v", tag.Name, err)
 		}
@@ -382,8 +402,70 @@ func watch() {
 	<-watcherDone
 }
 
+func promptPassword(prompt string) (string, error) {
+	fmt.Print(prompt)
+	raw, err := term.ReadPassword(int(os.Stdin.Fd()))
+	fmt.Println()
+	if err != nil {
+		return "", fmt.Errorf("reading password: %w", err)
+	}
+	return string(raw), nil
+}
+
+func handleUserManagement() bool {
+	if *addUser == "" && *updateUser == "" && !*listUsers {
+		return false
+	}
+
+	db, err := auth.OpenDB(*dbPath)
+	if err != nil {
+		log.Fatalf("Could not open auth database: %v", err)
+	}
+	defer db.Close()
+
+	switch {
+	case *addUser != "":
+		password, err := promptPassword(fmt.Sprintf("Password for %q: ", *addUser))
+		if err != nil {
+			log.Fatalf("Could not read password: %v", err)
+		}
+		if err := auth.AddUser(db, *addUser, password); err != nil {
+			log.Fatalf("Could not add user: %v", err)
+		}
+		fmt.Printf("User %q added.\n", *addUser)
+
+	case *updateUser != "":
+		password, err := promptPassword(fmt.Sprintf("New password for %q: ", *updateUser))
+		if err != nil {
+			log.Fatalf("Could not read password: %v", err)
+		}
+		if err := auth.UpdateUser(db, *updateUser, password); err != nil {
+			log.Fatalf("Could not update user: %v", err)
+		}
+		fmt.Printf("User %q updated.\n", *updateUser)
+
+	case *listUsers:
+		users, err := auth.ListUsers(db)
+		if err != nil {
+			log.Fatalf("Could not list users: %v", err)
+		}
+		if len(users) == 0 {
+			fmt.Println("No users found.")
+		}
+		for _, u := range users {
+			fmt.Println(u)
+		}
+	}
+
+	return true
+}
+
 func main() {
 	flag.Parse()
+
+	if handleUserManagement() {
+		return
+	}
 
 	if *templatePrint != "" {
 		var article post.Article
