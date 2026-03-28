@@ -39,7 +39,7 @@ var templateAuthor = flag.String("author", "", "Set a default post author")
 var listen = flag.Bool("listen", false, "Listen to changes in post directories and regenerate")
 var tagfeeds = flag.String("tagfeeds", "", "Generate RSS feeds for specified tags (comma-separated)")
 var micropubURL = flag.String("micropub-url", "", "Micropub endpoint base URL (e.g. https://example.com/micropub); adds <link> tags to templates")
-var dbPath = flag.String("db", "blogger.db", "SQLite database path for auth/user management")
+var dbPath = flag.String("db", ".", "Directory for the auth database (blogger.db is created here)")
 var addUser = flag.String("adduser", "", "Add a new user to the auth database (prompts for password)")
 var updateUser = flag.String("updateuser", "", "Update an existing user's password (prompts for password)")
 var listUsers = flag.Bool("listusers", false, "List all users in the auth database")
@@ -438,7 +438,7 @@ func handleUserManagement() bool {
 		return false
 	}
 
-	db, err := auth.OpenDB(*dbPath)
+	db, err := auth.OpenDB(filepath.Join(*dbPath, "blogger.db"))
 	if err != nil {
 		log.Fatalf("Could not open auth database: %v", err)
 	}
@@ -520,7 +520,7 @@ func main() {
 	generate()
 
 	if *serveAddr != "" {
-		db, err := auth.OpenDB(*dbPath)
+		db, err := auth.OpenDB(filepath.Join(*dbPath, "blogger.db"))
 		if err != nil {
 			log.Fatalf("Could not open auth database for server: %v", err)
 		}
