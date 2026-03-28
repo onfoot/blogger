@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 	"time"
 
@@ -106,7 +107,10 @@ func (s *Server) handleMicropub(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) authenticated(r *http.Request) bool {
 	token := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
-	if token == "" {
+	// Only fall back to form body for non-JSON requests; reading FormValue on a
+	// JSON request consumes r.Body before parseJSON gets to it.
+	if token == "" && !strings.Contains(r.Header.Get("Content-Type"), "application/json") {
+		r.ParseForm() //nolint:errcheck
 		token = r.FormValue("access_token")
 	}
 	if token == "" {
@@ -693,8 +697,13 @@ func formatArticle(a post.Article) string {
 	if a.Draft {
 		sb.WriteString("draft: true\n")
 	}
-	for k, v := range a.Meta {
-		fmt.Fprintf(&sb, "meta-%s: %s\n", k, v)
+	metaKeys := make([]string, 0, len(a.Meta))
+	for k := range a.Meta {
+		metaKeys = append(metaKeys, k)
+	}
+	sort.Strings(metaKeys)
+	for _, k := range metaKeys {
+		fmt.Fprintf(&sb, "meta-%s: %s\n", k, a.Meta[k])
 	}
 	sb.WriteString("---\n\n")
 	sb.Write(a.RawContent)

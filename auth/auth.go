@@ -17,6 +17,11 @@ func OpenDB(dbPath string) (*sql.DB, error) {
 	if err != nil {
 		return nil, fmt.Errorf("opening database: %w", err)
 	}
+
+	// Serialise all access through one connection — SQLite does not support
+	// concurrent writers and will return "database is locked" otherwise.
+	db.SetMaxOpenConns(1)
+
 	if err := initDB(db); err != nil {
 		db.Close()
 		return nil, err
@@ -25,20 +30,30 @@ func OpenDB(dbPath string) (*sql.DB, error) {
 }
 
 func initDB(db *sql.DB) error {
-	_, err := db.Exec(`
+	// Enable foreign key enforcement (disabled by default in SQLite).
+	if _, err := db.Exec(`PRAGMA foreign_keys = ON`); err != nil {
+		return fmt.Errorf("enabling foreign keys: %w", err)
+	}
+	if _, err := db.Exec(`
 		CREATE TABLE IF NOT EXISTS users (
-			username     TEXT PRIMARY KEY,
+			username      TEXT PRIMARY KEY,
 			password_hash TEXT NOT NULL,
-			created_at   DATETIME DEFAULT CURRENT_TIMESTAMP
-		);
+			created_at    DATETIME DEFAULT CURRENT_TIMESTAMP
+		)
+	`); err != nil {
+		return fmt.Errorf("creating users table: %w", err)
+	}
+	if _, err := db.Exec(`
 		CREATE TABLE IF NOT EXISTS tokens (
 			token      TEXT PRIMARY KEY,
 			username   TEXT NOT NULL,
 			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
 			FOREIGN KEY (username) REFERENCES users(username) ON DELETE CASCADE
-		);
-	`)
-	return err
+		)
+	`); err != nil {
+		return fmt.Errorf("creating tokens table: %w", err)
+	}
+	return nil
 }
 
 // AddUser creates a new user with a bcrypt-hashed password.
@@ -121,10 +136,17 @@ func CreateToken(db *sql.DB, username string) (string, error) {
 	return token, nil
 }
 
-// ValidateToken returns the username associated with the Bearer token, or "" if invalid.
+// tokenTTL is how long a Bearer token remains valid after creation.
+const tokenTTL = "-90 days"
+
+// ValidateToken returns the username associated with the Bearer token, or "" if
+// the token is invalid or older than 90 days.
 func ValidateToken(db *sql.DB, token string) (string, error) {
 	var username string
-	err := db.QueryRow(`SELECT username FROM tokens WHERE token = ?`, token).Scan(&username)
+	err := db.QueryRow(
+		`SELECT username FROM tokens WHERE token = ? AND created_at > datetime('now', ?)`,
+		token, tokenTTL,
+	).Scan(&username)
 	if errors.Is(err, sql.ErrNoRows) {
 		return "", nil
 	}

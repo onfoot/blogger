@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"net/http"
+	"sync"
 
 	"macbirdie.net/blogger/auth"
 	"macbirdie.net/blogger/micropub"
@@ -43,6 +44,16 @@ var addUser = flag.String("adduser", "", "Add a new user to the auth database (p
 var updateUser = flag.String("updateuser", "", "Update an existing user's password (prompts for password)")
 var listUsers = flag.Bool("listusers", false, "List all users in the auth database")
 var serveAddr = flag.String("serve", "", "Start Micropub HTTP server on this address (e.g. :8080)")
+
+// generateMu prevents concurrent generate() calls from the fsnotify watcher
+// and the Micropub OnChange callback running simultaneously.
+var generateMu sync.Mutex
+
+func safeGenerate() {
+	generateMu.Lock()
+	defer generateMu.Unlock()
+	generate()
+}
 
 const templateFileName = "template.html"
 const rssTemplateFileName = "rsstemplate.html"
@@ -371,7 +382,7 @@ func watch() {
 			case event := <-watcher.Events:
 				if event.Has(fsnotify.Write) || event.Has(fsnotify.Create) {
 					log.Println("Modified file:", event.Name)
-					generate()
+					safeGenerate()
 				}
 			case err := <-watcher.Errors:
 				log.Println("Got error:", err)
@@ -517,7 +528,7 @@ func main() {
 			PostsDir: firstPostsDir,
 			SiteRoot: *siteRoot,
 			DestExt:  *destinationExt,
-			OnChange: generate,
+			OnChange: safeGenerate,
 		}
 
 		if *listen {
