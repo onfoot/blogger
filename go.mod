@@ -1,4 +1,4 @@
-module github.com/macbirdie/blogger
+module macbirdie.net/blogger
 
 go 1.21
 
@@ -7,4 +7,9 @@ require (
 	github.com/russross/blackfriday/v2 v2.1.0
 )
 
-require golang.org/x/sys v0.4.0 // indirect
+require (
+	github.com/mattn/go-sqlite3 v1.14.37 // indirect
+	golang.org/x/crypto v0.33.0 // indirect
+	golang.org/x/sys v0.30.0 // indirect
+	golang.org/x/term v0.29.0 // indirect
+)
