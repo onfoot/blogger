@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"net/http"
+	"net/url"
 	"sync"
 
 	"macbirdie.net/blogger/auth"
@@ -39,7 +40,8 @@ var templateAuthor = flag.String("author", "", "Set a default post author")
 var listen = flag.Bool("listen", false, "Listen to changes in post directories and regenerate")
 var tagfeeds = flag.String("tagfeeds", "", "Generate RSS feeds for specified tags (comma-separated)")
 var micropubURL = flag.String("micropub-url", "", "Micropub endpoint base URL (e.g. https://example.com/micropub); adds <link> tags to templates")
-var dbPath = flag.String("db", ".", "Directory for the auth database (blogger.db is created here)")
+var siteURL = flag.String("site-url", "", "Absolute public site URL (e.g. https://example.com/blog/), used for IndieAuth 'me' and Micropub post URLs; defaults to the -micropub-url origin plus -root")
+var dbPath =flag.String("db", ".", "Directory for the auth database (blogger.db is created here)")
 var addUser = flag.String("adduser", "", "Add a new user to the auth database (prompts for password)")
 var updateUser = flag.String("updateuser", "", "Update an existing user's password (prompts for password)")
 var listUsers = flag.Bool("listusers", false, "List all users in the auth database")
@@ -433,6 +435,19 @@ func promptPassword(prompt string) (string, error) {
 	return string(raw), nil
 }
 
+// resolveSiteURL returns the absolute public URL of the site. IndieAuth
+// requires "me" to be an absolute URL, so a bare path like "/" is not enough.
+func resolveSiteURL() string {
+	if *siteURL != "" {
+		return *siteURL
+	}
+	if u, err := url.Parse(*micropubURL); err == nil && u.Scheme != "" && u.Host != "" {
+		return u.Scheme + "://" + u.Host + *siteRoot
+	}
+	log.Printf("Warning: neither -site-url nor an absolute -micropub-url set; IndieAuth 'me' will not be an absolute URL")
+	return *siteRoot
+}
+
 func handleUserManagement() bool {
 	if *addUser == "" && *updateUser == "" && !*listUsers {
 		return false
@@ -532,7 +547,7 @@ func main() {
 		srv := &micropub.Server{
 			DB:       db,
 			PostsDir: firstPostsDir,
-			SiteRoot: *siteRoot,
+			SiteRoot: resolveSiteURL(),
 			DestExt:  *destinationExt,
 			OnChange: safeGenerate,
 		}
